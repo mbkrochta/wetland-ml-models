@@ -1,0 +1,66 @@
+predictor,tag,description,source
+mean_WT,response,Daily mean water temperature (°C),In situ logger
+max_WT,response,Daily maximum water temperature (°C),In situ logger
+min_WT,response,Daily minimum water temperature (°C),In situ logger
+range_WT,response,Daily water temperature range (°C),In situ logger
+Solar_daily,remote,Daily shortwave radiation (MJ/m²/day),GRIDMET
+Solar_2d,remote,2-day mean shortwave radiation (MJ/m²/day),GRIDMET
+Solar_3d,remote,3-day mean shortwave radiation (MJ/m²/day),GRIDMET
+Solar_7d,remote,7-day mean shortwave radiation (MJ/m²/day),GRIDMET
+WL_daily_mean,full,Daily Mean of water level (m),In situ logger
+WL_daily_max,full,Daily Max of water level (m),In situ logger
+WL_daily_min,full,Daily Min of water level (m),In situ logger
+WL_daily_range,full,Daily Range of water level (m),In situ logger
+WL_mean_2day,full,Mean 2Day of water level (m),In situ logger
+WL_mean_3day,full,Mean 3Day of water level (m),In situ logger
+WL_mean_7day,full,Mean 7Day of water level (m),In situ logger
+WL_max_2day,full,Max 2Day of water level (m),In situ logger
+WL_max_3day,full,Max 3Day of water level (m),In situ logger
+WL_max_7day,full,Max 7Day of water level (m),In situ logger
+WL_min_2day,full,Min 2Day of water level (m),In situ logger
+WL_min_3day,full,Min 3Day of water level (m),In situ logger
+WL_min_7day,full,Min 7Day of water level (m),In situ logger
+Air_tmin,remote,Tmin air temperature (°C),PRISM
+Air_tmean,remote,Tmean air temperature (°C),PRISM
+Air_tmax,remote,Tmax air temperature (°C),PRISM
+Air_trange,remote,Trange air temperature (°C),PRISM
+Air_tmean_2day,remote,Tmean 2Day air temperature (°C),PRISM
+Air_tmean_3day,remote,Tmean 3Day air temperature (°C),PRISM
+Air_tmean_7day,remote,Tmean 7Day air temperature (°C),PRISM
+Air_tmax_2day,remote,Tmax 2Day air temperature (°C),PRISM
+Air_tmax_3day,remote,Tmax 3Day air temperature (°C),PRISM
+Air_tmax_7day,remote,Tmax 7Day air temperature (°C),PRISM
+Air_tmin_2day,remote,Tmin 2Day air temperature (°C),PRISM
+Air_tmin_3day,remote,Tmin 3Day air temperature (°C),PRISM
+Air_tmin_7day,remote,Tmin 7Day air temperature (°C),PRISM
+GWT_mean,full,Mean groundwater temperature (°C),In situ logger
+GWT_max,full,Max groundwater temperature (°C),In situ logger
+GWT_min,full,Min groundwater temperature (°C),In situ logger
+GWT_range,full,Range groundwater temperature (°C),In situ logger
+GWT_mean_2day,full,Mean 2Day groundwater temperature (°C),In situ logger
+GWT_mean_3day,full,Mean 3Day groundwater temperature (°C),In situ logger
+GWT_mean_7day,full,Mean 7Day groundwater temperature (°C),In situ logger
+GWT_max_2day,full,Max 2Day groundwater temperature (°C),In situ logger
+GWT_max_3day,full,Max 3Day groundwater temperature (°C),In situ logger
+GWT_max_7day,full,Max 7Day groundwater temperature (°C),In situ logger
+GWT_min_2day,full,Min 2Day groundwater temperature (°C),In situ logger
+GWT_min_3day,full,Min 3Day groundwater temperature (°C),In situ logger
+GWT_min_7day,full,Min 7Day groundwater temperature (°C),In situ logger
+GWL_mean,full,Mean groundwater level (m),In situ logger
+GWL_max,full,Max groundwater level (m),In situ logger
+GWL_min,full,Min groundwater level (m),In situ logger
+GWL_range,full,Range groundwater level (m),In situ logger
+GWL_mean_2day,full,Mean 2Day groundwater level (m),In situ logger
+GWL_mean_3day,full,Mean 3Day groundwater level (m),In situ logger
+GWL_mean_7day,full,Mean 7Day groundwater level (m),In situ logger
+GWL_max_2day,full,Max 2Day groundwater level (m),In situ logger
+GWL_max_3day,full,Max 3Day groundwater level (m),In situ logger
+GWL_max_7day,full,Max 7Day groundwater level (m),In situ logger
+GWL_min_2day,full,Min 2Day groundwater level (m),In situ logger
+GWL_min_3day,full,Min 3Day groundwater level (m),In situ logger
+GWL_min_7day,full,Min 7Day groundwater level (m),In situ logger
+ppt,remote,Daily precipitation (mm),PRISM
+ppt_7day,remote,7-day cumulative precipitation (mm),PRISM
+Water_area_m2_3d,remote,Ponded surface water area (3-day mean),PlanetScope imagery
+Elev_m,remote,Elevation of site outlet (m),DEM-derived
+Size_km2,remote,Contributing drainage area (km²),DEM-derived
