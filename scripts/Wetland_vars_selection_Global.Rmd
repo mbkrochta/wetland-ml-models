@@ -1,0 +1,127 @@
+---
+title: "Wetland_vars_correlations"
+output: html_document
+date: "2025-08-05"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+```
+
+```{r}
+# Load libraries
+library(tidyverse)
+library(broom)
+
+# Read data
+df <- read.csv("daily_wetlands_dataset.csv")
+
+# Define response variables
+responses <- c("mean_WT", "max_WT", "range_WT") 
+
+# Define predictor groups
+predictor_groups <- list(
+  Solar = c("Solar_daily", "Solar_2d", "Solar_3d", "Solar_7d"),
+  WL_mean = c("WL_daily_mean", "WL_mean_2day", "WL_mean_3day", "WL_mean_7day"),
+  WL_max = c("WL_daily_max", "WL_max_2day", "WL_max_3day", "WL_max_7day"),
+  WL_min = c("WL_daily_min", "WL_min_2day", "WL_min_3day", "WL_min_7day"),
+  Air_tmean = c("Air_tmean", "Air_tmean_2day", "Air_tmean_3day", "Air_tmean_7day"),
+  Air_tmax = c("Air_tmax", "Air_tmax_2day", "Air_tmax_3day", "Air_tmax_7day"),
+  Air_tmin = c("Air_tmin", "Air_tmin_2day", "Air_tmin_3day", "Air_tmin_7day"),
+  GWT_mean = c("GWT_mean", "GWT_mean_2day", "GWT_mean_3day", "GWT_mean_7day"),
+  GWT_max = c("GWT_max", "GWT_max_2day", "GWT_max_3day", "GWT_max_7day"),
+  GWT_min = c("GWT_min", "GWT_min_2day", "GWT_min_3day", "GWT_min_7day"),
+  GWL_mean = c("GWL_mean", "GWL_mean_2day", "GWL_mean_3day", "GWL_mean_7day"),
+  GWL_max = c("GWL_max", "GWL_max_2day", "GWL_max_3day", "GWL_max_7day"),
+  GWL_min = c("GWL_min", "GWL_min_2day", "GWL_min_3day", "GWL_min_7day"),
+  ppt = c("ppt", "ppt_7day")
+)
+
+# Static predictors to keep for all models
+static_predictors <- c("Air_trange", "WL_daily_range",
+                       "GWT_range", "GWL_range", "Water_area_m2_3d",
+                       "Elev_m", "Size_km2")
+
+# Function to find best predictor per group
+find_best_predictors <- function(response_var) {
+  results <- map_df(predictor_groups, function(vars) {
+    # Name each model by its variable name
+    models <- set_names(vars) %>% 
+      map(~ lm(reformulate(.x, response_var), data = df))
+    metrics <- map_dfr(models, glance, .id = "predictor")
+    best <- metrics %>% filter(adj.r.squared == max(adj.r.squared, na.rm = TRUE))
+    return(best)
+  }, .id = "group")
+  return(results)
+}
+
+# Apply to all responses
+best_predictors_all <- map(responses, find_best_predictors)
+names(best_predictors_all) <- responses
+
+# Get final list of predictors for each model (best + static)
+combined_predictor_lists <- map(best_predictors_all, ~ c(.x$predictor, static_predictors))
+
+# Subset original dataframe for each response model
+model_data <- map2(combined_predictor_lists, responses, function(vars, response) {
+  df %>%
+    select(all_of(c(response, vars)))
+})
+
+# Named outputs
+mean_model_data <- model_data$mean_WT
+max_model_data <- model_data$max_WT
+range_model_data <- model_data$range_WT  
+
+```
+
+
+```{r}
+# Load additional packages
+library(caret)
+
+# Set correlation threshold
+cor_threshold <- 0.9
+
+# Function to remove highly correlated predictors (excluding the response variable)
+remove_correlated_predictors <- function(df, response, threshold = cor_threshold) {
+  # Extract predictor columns
+  predictors <- df %>% select(-all_of(response))
+  
+  # Compute correlation matrix
+  cor_matrix <- cor(predictors, use = "pairwise.complete.obs")
+  
+  # Find highly correlated variables
+  high_corr <- findCorrelation(cor_matrix, cutoff = threshold, names = TRUE, exact = TRUE)
+  
+  # Drop the highly correlated variables
+  cleaned_df <- df %>% select(-all_of(high_corr))
+  
+  return(cleaned_df)
+}
+
+# Apply to each model dataset
+model_data_uncorrelated <- map2(model_data, responses, remove_correlated_predictors)
+
+# Name the list elements
+names(model_data_uncorrelated) <- responses
+
+# You now have:
+mean_model_final <- model_data_uncorrelated$mean_WT
+max_model_final  <- model_data_uncorrelated$max_WT
+range_model_final <- model_data_uncorrelated$range_WT
+
+# Optional: check which variables were removed
+removed_vars <- map2(model_data, model_data_uncorrelated, function(orig, cleaned) {
+  setdiff(names(orig), names(cleaned))
+})
+names(removed_vars) <- responses
+
+names(mean_model_final)
+names(max_model_final)
+names(range_model_final)
+
+```
+
+
