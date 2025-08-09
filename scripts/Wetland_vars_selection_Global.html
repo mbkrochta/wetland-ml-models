@@ -360,9 +360,27 @@ library(tidyverse)
 library(broom)
 
 # Read data
-df &lt;- read.csv(&quot;daily_wetlands_dataset.csv&quot;)
+df &lt;- read.csv(&quot;C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/data/daily_wetlands_dataset.csv&quot;)
 
-# Define response variables
+names(df)</code></pre>
+<pre><code>##  [1] &quot;Site&quot;             &quot;Datetime&quot;         &quot;mean_WT&quot;          &quot;max_WT&quot;          
+##  [5] &quot;min_WT&quot;           &quot;range_WT&quot;         &quot;Solar_daily&quot;      &quot;Solar_2d&quot;        
+##  [9] &quot;Solar_3d&quot;         &quot;Solar_7d&quot;         &quot;WL_daily_mean&quot;    &quot;WL_daily_max&quot;    
+## [13] &quot;WL_daily_min&quot;     &quot;WL_daily_range&quot;   &quot;WL_mean_2day&quot;     &quot;WL_mean_3day&quot;    
+## [17] &quot;WL_mean_7day&quot;     &quot;WL_max_2day&quot;      &quot;WL_max_3day&quot;      &quot;WL_max_7day&quot;     
+## [21] &quot;WL_min_2day&quot;      &quot;WL_min_3day&quot;      &quot;WL_min_7day&quot;      &quot;Air_tmin&quot;        
+## [25] &quot;Air_tmean&quot;        &quot;Air_tmax&quot;         &quot;Air_trange&quot;       &quot;Air_tmean_2day&quot;  
+## [29] &quot;Air_tmean_3day&quot;   &quot;Air_tmean_7day&quot;   &quot;Air_tmax_2day&quot;    &quot;Air_tmax_3day&quot;   
+## [33] &quot;Air_tmax_7day&quot;    &quot;Air_tmin_2day&quot;    &quot;Air_tmin_3day&quot;    &quot;Air_tmin_7day&quot;   
+## [37] &quot;GWT_mean&quot;         &quot;GWT_max&quot;          &quot;GWT_min&quot;          &quot;GWT_range&quot;       
+## [41] &quot;GWT_mean_2day&quot;    &quot;GWT_mean_3day&quot;    &quot;GWT_mean_7day&quot;    &quot;GWT_max_2day&quot;    
+## [45] &quot;GWT_max_3day&quot;     &quot;GWT_max_7day&quot;     &quot;GWT_min_2day&quot;     &quot;GWT_min_3day&quot;    
+## [49] &quot;GWT_min_7day&quot;     &quot;GWL_mean&quot;         &quot;GWL_max&quot;          &quot;GWL_min&quot;         
+## [53] &quot;GWL_range&quot;        &quot;GWL_mean_2day&quot;    &quot;GWL_mean_3day&quot;    &quot;GWL_mean_7day&quot;   
+## [57] &quot;GWL_max_2day&quot;     &quot;GWL_max_3day&quot;     &quot;GWL_max_7day&quot;     &quot;GWL_min_2day&quot;    
+## [61] &quot;GWL_min_3day&quot;     &quot;GWL_min_7day&quot;     &quot;ppt&quot;              &quot;ppt_7day&quot;        
+## [65] &quot;Water_area_m2_3d&quot; &quot;Elev_m&quot;           &quot;Size_km2&quot;</code></pre>
+<pre class="r"><code># Define response variables
 responses &lt;- c(&quot;mean_WT&quot;, &quot;max_WT&quot;, &quot;range_WT&quot;) 
 
 # Define predictor groups
@@ -408,10 +426,10 @@ names(best_predictors_all) &lt;- responses
 # Get final list of predictors for each model (best + static)
 combined_predictor_lists &lt;- map(best_predictors_all, ~ c(.x$predictor, static_predictors))
 
-# Subset original dataframe for each response model
+# Subset original dataframe for each response model, keeping Site and Datetime
 model_data &lt;- map2(combined_predictor_lists, responses, function(vars, response) {
   df %&gt;%
-    select(all_of(c(response, vars)))
+    select(all_of(c(&quot;Site&quot;, &quot;Datetime&quot;, response, vars)))
 })
 
 # Named outputs
@@ -420,14 +438,21 @@ max_model_data &lt;- model_data$max_WT
 range_model_data &lt;- model_data$range_WT  </code></pre>
 <pre class="r"><code># Load additional packages
 library(caret)
+library(tidyverse)
+library(purrr)
 
 # Set correlation threshold
 cor_threshold &lt;- 0.9
 
-# Function to remove highly correlated predictors (excluding the response variable)
+# Function to remove highly correlated predictors (excluding the response variable, Site, and Datetime)
 remove_correlated_predictors &lt;- function(df, response, threshold = cor_threshold) {
-  # Extract predictor columns
-  predictors &lt;- df %&gt;% select(-all_of(response))
+  # Identify columns to exclude from correlation check
+  exclude_cols &lt;- c(response, &quot;Site&quot;, &quot;Datetime&quot;)
+  
+  # Get predictor columns that are numeric
+  predictors &lt;- df %&gt;%
+    select(-all_of(exclude_cols)) %&gt;%
+    select(where(is.numeric))
   
   # Compute correlation matrix
   cor_matrix &lt;- cor(predictors, use = &quot;pairwise.complete.obs&quot;)
@@ -448,8 +473,8 @@ model_data_uncorrelated &lt;- map2(model_data, responses, remove_correlated_pred
 names(model_data_uncorrelated) &lt;- responses
 
 # You now have:
-mean_model_final &lt;- model_data_uncorrelated$mean_WT
-max_model_final  &lt;- model_data_uncorrelated$max_WT
+mean_model_final  &lt;- model_data_uncorrelated$mean_WT
+max_model_final   &lt;- model_data_uncorrelated$max_WT
 range_model_final &lt;- model_data_uncorrelated$range_WT
 
 # Optional: check which variables were removed
@@ -458,21 +483,32 @@ removed_vars &lt;- map2(model_data, model_data_uncorrelated, function(orig, clea
 })
 names(removed_vars) &lt;- responses
 
+# Check variable names
 names(mean_model_final)</code></pre>
-<pre><code>##  [1] &quot;mean_WT&quot;          &quot;Solar_3d&quot;         &quot;WL_max_7day&quot;      &quot;Air_tmax_2day&quot;   
-##  [5] &quot;Air_tmin&quot;         &quot;GWT_max&quot;          &quot;GWL_mean_7day&quot;    &quot;ppt&quot;             
-##  [9] &quot;Air_trange&quot;       &quot;WL_daily_range&quot;   &quot;GWT_range&quot;        &quot;GWL_range&quot;       
-## [13] &quot;Water_area_m2_3d&quot; &quot;Elev_m&quot;           &quot;Size_km2&quot;</code></pre>
+<pre><code>##  [1] &quot;Site&quot;             &quot;Datetime&quot;         &quot;mean_WT&quot;          &quot;Solar_3d&quot;        
+##  [5] &quot;WL_max_7day&quot;      &quot;Air_tmax_2day&quot;    &quot;Air_tmin&quot;         &quot;GWT_max&quot;         
+##  [9] &quot;GWL_mean_7day&quot;    &quot;ppt&quot;              &quot;Air_trange&quot;       &quot;WL_daily_range&quot;  
+## [13] &quot;GWT_range&quot;        &quot;GWL_range&quot;        &quot;Water_area_m2_3d&quot; &quot;Elev_m&quot;          
+## [17] &quot;Size_km2&quot;</code></pre>
 <pre class="r"><code>names(max_model_final)</code></pre>
-<pre><code>##  [1] &quot;max_WT&quot;           &quot;Solar_2d&quot;         &quot;WL_max_7day&quot;      &quot;Air_tmean&quot;       
-##  [5] &quot;Air_tmin&quot;         &quot;GWT_max&quot;          &quot;GWL_mean_7day&quot;    &quot;ppt&quot;             
-##  [9] &quot;Air_trange&quot;       &quot;WL_daily_range&quot;   &quot;GWT_range&quot;        &quot;GWL_range&quot;       
-## [13] &quot;Water_area_m2_3d&quot; &quot;Elev_m&quot;           &quot;Size_km2&quot;</code></pre>
+<pre><code>##  [1] &quot;Site&quot;             &quot;Datetime&quot;         &quot;max_WT&quot;           &quot;Solar_2d&quot;        
+##  [5] &quot;WL_max_7day&quot;      &quot;Air_tmean&quot;        &quot;Air_tmin&quot;         &quot;GWT_max&quot;         
+##  [9] &quot;GWL_mean_7day&quot;    &quot;ppt&quot;              &quot;Air_trange&quot;       &quot;WL_daily_range&quot;  
+## [13] &quot;GWT_range&quot;        &quot;GWL_range&quot;        &quot;Water_area_m2_3d&quot; &quot;Elev_m&quot;          
+## [17] &quot;Size_km2&quot;</code></pre>
 <pre class="r"><code>names(range_model_final)</code></pre>
-<pre><code>##  [1] &quot;range_WT&quot;         &quot;Solar_daily&quot;      &quot;WL_daily_max&quot;     &quot;Air_tmax&quot;        
-##  [5] &quot;Air_tmin_3day&quot;    &quot;GWT_max_7day&quot;     &quot;GWL_max_7day&quot;     &quot;ppt&quot;             
-##  [9] &quot;Air_trange&quot;       &quot;WL_daily_range&quot;   &quot;GWT_range&quot;        &quot;GWL_range&quot;       
-## [13] &quot;Water_area_m2_3d&quot; &quot;Elev_m&quot;           &quot;Size_km2&quot;</code></pre>
+<pre><code>##  [1] &quot;Site&quot;             &quot;Datetime&quot;         &quot;range_WT&quot;         &quot;Solar_daily&quot;     
+##  [5] &quot;WL_daily_max&quot;     &quot;Air_tmax&quot;         &quot;Air_tmin_3day&quot;    &quot;GWT_max_7day&quot;    
+##  [9] &quot;GWL_max_7day&quot;     &quot;ppt&quot;              &quot;Air_trange&quot;       &quot;WL_daily_range&quot;  
+## [13] &quot;GWT_range&quot;        &quot;GWL_range&quot;        &quot;Water_area_m2_3d&quot; &quot;Elev_m&quot;          
+## [17] &quot;Size_km2&quot;</code></pre>
+<pre class="r"><code># Set the folder path
+output_dir &lt;- &quot;C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/data&quot;
+
+# Save each dataframe
+write.csv(mean_model_final,  file.path(output_dir, &quot;mean_global_data.csv&quot;),  row.names = FALSE)
+write.csv(max_model_final,   file.path(output_dir, &quot;max_global_data.csv&quot;),   row.names = FALSE)
+write.csv(range_model_final, file.path(output_dir, &quot;range_global_data.csv&quot;), row.names = FALSE)</code></pre>
 
 
 

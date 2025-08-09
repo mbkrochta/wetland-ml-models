@@ -1,0 +1,477 @@
+---
+title: "Global wetland ML models"
+author: "Michael Krochta"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+**Set up**
+```{r}
+library(dplyr)
+library(lubridate)
+library(caret)
+library(ranger)     
+library(xgboost)    
+library(tibble)
+library(stringr)
+library(tidyr)
+library(purrr)
+set.seed(42)        # Reproducibility for folds/shuffles
+```
+
+**Loading data**
+```{r}
+max_df  <- read.csv("C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/data/max_global_data.csv",  stringsAsFactors = FALSE)
+mean_df <- read.csv("C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/data/mean_global_data.csv", stringsAsFactors = FALSE)
+range_df <- read.csv("C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/data/range_global_data.csv",stringsAsFactors = FALSE)
+
+# Ensure consistent column names and types
+# - Datetime to Date
+fix_dates <- function(df) {
+  if (!inherits(df$Datetime, "Date")) {
+    df$Datetime <- as.Date(df$Datetime, tryFormats = c("%Y-%m-%d","%m/%d/%Y","%m/%d/%y"))
+  }
+  df
+}
+max_df   <- fix_dates(max_df)
+mean_df  <- fix_dates(mean_df)
+range_df <- fix_dates(range_df)
+
+# Response column names (adjust if different)
+resp_cols <- list(
+  max   = "max_WT",
+  mean  = "mean_WT",
+  range = "range_WT"
+)
+```
+
+*Define "Remote-only" exclusion list (field-derived vars)*
+```{r}
+remote_exclude_exact <- c(
+  "WL_daily_mean","WL_daily_max","WL_daily_min","WL_daily_range",
+  "WL_mean_2day","WL_mean_3day","WL_mean_7day",
+  "WL_max_2day","WL_max_3day","WL_max_7day",
+  "WL_min_2day","WL_min_3day","WL_min_7day",
+  "GWT_mean","GWT_max","GWT_min","GWT_range",
+  "GWT_mean_2day","GWT_mean_3day","GWT_mean_7day",
+  "GWT_max_2day","GWT_max_3day","GWT_max_7day",
+  "GWT_min_2day","GWT_min_3day","GWT_min_7day",
+  "GWL_mean","GWL_max","GWL_min","GWL_range",
+  "GWL_mean_2day","GWL_mean_3day","GWL_mean_7day",
+  "GWL_max_2day","GWL_max_3day","GWL_max_7day",
+  "GWL_min_2day","GWL_min_3day","GWL_min_7day", "Water_area_m2_3d"
+)
+# Also remove any columns that *start with* these prefixes
+remote_exclude_prefix <- c("WL_", "GWT_", "GWL_", "Water")
+
+# Build predictor vector for a given df + mode
+get_predictors <- function(df, response_col, mode = c("all", "remote")) {
+  mode <- match.arg(mode)
+  base <- setdiff(names(df), c(response_col, "Site", "Datetime")) # never model on ID/time
+  if (mode == "all") return(base)
+  # Remote-only: drop exact matches + prefixed columns if present
+  drop_prefixed <- unlist(lapply(remote_exclude_prefix, function(p) grep(paste0("^", p), base, value = TRUE)))
+  setdiff(base, unique(c(remote_exclude_exact, drop_prefixed)))
+}
+```
+
+
+**CV: Build blocked folds by week**
+*Keeps whole weeks together (reduces inflated accuracy from adjacent days)*
+```{r}
+make_weekly_folds <- function(df, k = 5, date_col = "Datetime") {
+  df <- df %>% mutate(.week = floor_date(.data[[date_col]], unit = "week", week_start = 1))
+  weeks <- unique(df$.week)
+  set.seed(42)
+  weeks <- sample(weeks)        # shuffle weeks
+  folds <- split(weeks, cut(seq_along(weeks), breaks = k, labels = FALSE))
+
+  index <- list(); indexOut <- list()
+  for (i in seq_len(k)) {
+    val_weeks <- folds[[i]]
+    val_idx <- which(df$.week %in% val_weeks)
+    trn_idx <- setdiff(seq_len(nrow(df)), val_idx)
+    index[[paste0("Fold", i)]]    <- trn_idx
+    indexOut[[paste0("Fold", i)]] <- val_idx
+  }
+  list(index = index, indexOut = indexOut)
+}
+```
+
+**Metrics**
+```{r}
+nse <- function(obs, pred) {
+  1 - sum((obs - pred)^2, na.rm = TRUE) / sum((obs - mean(obs, na.rm = TRUE))^2, na.rm = TRUE)
+}
+
+# Compute overall + by-site metrics from out-of-fold predictions
+compute_metrics <- function(pred_df, truth_col = "obs", pred_col = "pred", site_col = "Site") {
+  # Overall
+  overall <- tibble(
+    RMSE = RMSE(pred_df[[pred_col]], pred_df[[truth_col]]),
+    MAE  = MAE (pred_df[[pred_col]], pred_df[[truth_col]]),
+    R2   = R2  (pred_df[[pred_col]], pred_df[[truth_col]]),
+    NSE  = nse (pred_df[[truth_col]], pred_df[[pred_col]])
+  )
+
+  # By-site
+  by_site <- pred_df %>%
+    group_by(.data[[site_col]]) %>%
+    summarise(
+      RMSE = RMSE(.data[[pred_col]], .data[[truth_col]]),
+      MAE  = MAE (.data[[pred_col]], .data[[truth_col]]),
+      R2   = R2  (.data[[pred_col]], .data[[truth_col]]),
+      NSE  = nse (.data[[truth_col]], .data[[pred_col]]),
+      .groups = "drop"
+    ) %>%
+    rename(Site = .data[[site_col]])
+
+  list(overall = overall, by_site = by_site)
+}
+```
+
+**Hyperparameter grids (Stage 1: coarse)**
+```{r}
+rf_grid_coarse <- function(p) {
+  expand.grid(
+    mtry          = unique(pmax(1, c(floor(sqrt(p)), floor(p/3), floor(p/2)))),
+    splitrule     = "variance",
+    min.node.size = c(1, 5, 10),
+    stringsAsFactors = FALSE   # <-- add this
+  )
+}
+
+xgb_grid_coarse <- expand.grid(
+  nrounds          = c(200, 500),
+  max_depth        = c(3, 6, 9),
+  eta              = c(0.3, 0.1),
+  gamma            = c(0, 0.1),
+  colsample_bytree = c(0.8, 1.0),
+  min_child_weight = c(1, 3),
+  subsample        = c(0.8, 1.0)
+)
+
+```
+
+**Core model trainer (XGB or RFR) with blocked CV + saved OOF predictions**
+```{r}
+train_model <- function(data,
+                        response,
+                        predictors,
+                        model_type = c("xgb", "rfr"),
+                        k = 5,
+                        site_col = "Site",
+                        date_col = "Datetime",
+                        tune_grid = NULL) {
+
+  model_type <- match.arg(model_type)
+
+  # 1) Keep only needed columns; drop rows with NA in response/predictors
+  df <- data %>% select(all_of(c(site_col, date_col, response, predictors))) %>% na.omit()
+
+  # 2) Build blocked folds (weekly)
+  folds <- make_weekly_folds(df, k = k, date_col = date_col)
+
+  # 3) caret control: use our folds + save OOF preds for by-site metrics
+  ctrl <- trainControl(
+    method         = "cv",
+    number         = k,
+    index          = folds$index,
+    indexOut       = folds$indexOut,
+    verboseIter    = FALSE,
+    savePredictions= "final"   # <= we’ll compute metrics from these OOF predictions
+  )
+
+  # 4) Default tuning grids if not provided
+  if (is.null(tune_grid)) {
+    if (model_type == "rfr") {
+      tune_grid <- rf_grid_coarse(length(predictors))
+    } else {
+      tune_grid <- xgb_grid_coarse
+    }
+  }
+
+  # 5) Train
+  form <- as.formula(paste(response, "~ ."))
+  train_df <- df %>% select(all_of(c(response, predictors)))   # caret formula uses only predictors/response
+
+  if (model_type == "rfr") {
+  if (is.null(tune_grid)) tune_grid <- rf_grid_coarse(length(predictors))
+    fit <- train(
+      form,
+      data      = train_df,
+      method    = "ranger",
+      trControl = ctrl,
+      tuneGrid  = tune_grid,
+      metric    = "RMSE",
+      importance= "permutation", # more reliable than impurity
+      num.trees = 500
+    )
+  } else {
+    fit <- train(
+      form,
+      data      = train_df,
+      method    = "xgbTree",
+      trControl = ctrl,
+      tuneGrid  = tune_grid,
+      metric    = "RMSE"
+    )
+  }
+
+  # 6) Out-of-fold predictions joined back to Site for by-site metrics
+  # caret's $pred stores CV preds; need the matching rows' Site values
+ # --- OOF predictions: align to original rows via caret's rowIndex
+if (!"rowIndex" %in% names(fit$pred)) {
+  stop("caret did not return 'rowIndex' in fit$pred; cannot align OOF predictions to Site/Date.")
+}
+
+oof <- fit$pred %>%
+  mutate(
+    Site = df[[site_col]][rowIndex],
+    Date = df[[date_col]][rowIndex]
+  ) %>%
+  transmute(Site, Date, obs = obs, pred = pred)
+
+  # 7) Metrics
+  mets <- compute_metrics(oof, truth_col = "obs", pred_col = "pred", site_col = "Site")
+
+  # 8) Variable importance
+  vimp <- varImp(fit)$importance %>%
+    rownames_to_column("Variable") %>%
+    arrange(desc(Overall))
+
+  list(
+    response     = response,
+    model_type   = model_type,
+    predictors   = predictors,
+    best_params  = fit$bestTune,
+    cv_results   = fit$results,
+    metrics_overall = mets$overall,
+    metrics_by_site = mets$by_site,
+    var_importance  = vimp,
+    oof_predictions = oof,
+    fit_object      = fit
+  )
+}
+```
+
+**Build datasets for each predictor set**
+*- Set A (All): exclude Hideaway & Cooper*
+*- Set B (Remote-only): include all 7 sites; drop WL/GWT/GWL vars*
+```{r}
+sites_exclude_all <- c("Hideaway","Cooper")
+
+prep_dataset <- function(df, response_key, mode = c("all","remote")) {
+  mode <- match.arg(mode)
+  response_col <- resp_cols[[response_key]]
+
+  df2 <- df
+  if (mode == "all") {
+    df2 <- df2 %>% filter(!(Site %in% sites_exclude_all))
+  }
+  preds <- get_predictors(df2, response_col, mode = mode)
+  list(data = df2, response = response_col, predictors = preds)
+}
+```
+
+**Run global models for all responses and both predictor sets**
+*(XGB and RFR; 5-fold blocked CV)*
+```{r}
+run_all <- function() {
+  results <- list()
+
+  for (resp_key in c("max","mean","range")) {
+    # Select the right data frame for this response
+    df <- switch(resp_key,
+                 max   = max_df,
+                 mean  = mean_df,
+                 range = range_df)
+
+    # --- Set A: All predictors (5 sites)
+    A <- prep_dataset(df, resp_key, mode = "all")
+    # XGB
+    results[[paste(resp_key,"A_xgb",sep="_")]] <- train_model(
+      data = A$data, response = A$response, predictors = A$predictors,
+      model_type = "xgb", k = 5
+    )
+    # RFR
+    results[[paste(resp_key,"A_rfr",sep="_")]] <- train_model(
+      data = A$data, response = A$response, predictors = A$predictors,
+      model_type = "rfr", k = 5
+    )
+
+    # --- Set B: Remote-only (7 sites)
+    B <- prep_dataset(df, resp_key, mode = "remote")
+    # XGB
+    results[[paste(resp_key,"B_xgb",sep="_")]] <- train_model(
+      data = B$data, response = B$response, predictors = B$predictors,
+      model_type = "xgb", k = 5
+    )
+    # RFR
+    results[[paste(resp_key,"B_rfr",sep="_")]] <- train_model(
+      data = B$data, response = B$response, predictors = B$predictors,
+      model_type = "rfr", k = 5
+    )
+  }
+
+  results
+}
+```
+
+***RUN THE MODELS***
+```{r}
+results <- run_all()
+```
+
+**Evaluating results**
+```{r}
+names(results)
+
+# Global metrics table
+metrics_overall <- map_df(results, ~ .x$metrics_overall %>% mutate(.rows = NULL), .id = "model_id") %>%
+  separate(model_id, into = c("response","set","alg"), sep = "_") %>%
+  relocate(response,set,alg)
+
+metrics_overall %>% arrange(response,set,alg)
+
+# By-site metrics (+ how many OOF preds per site)
+metrics_by_site <- map_df(results, function(x){
+  n_by_site <- x$oof_predictions %>% count(Site, name = "n_oof")
+  x$metrics_by_site %>%
+    left_join(n_by_site, by = "Site") %>%
+    mutate(model_id = paste(x$response, ifelse(length(x$predictors)==0,"", "AorB"), x$model_type, sep="_"))
+}, .id = "model_id") %>%
+  separate(model_id, into = c("response","set","alg"), sep = "_", extra = "drop") %>%
+  relocate(response,set,alg,Site)
+
+metrics_by_site %>% arrange(response,set,alg,Site)
+
+# Best hyperparameters (joined with global metrics)
+best_params <- map_df(results, ~ tibble::as_tibble(.x$best_params), .id="model_id") %>%
+  separate(model_id, into = c("response","set","alg"), sep = "_") %>%
+  left_join(metrics_overall, by = c("response","set","alg"))
+
+best_params %>% arrange(response,set,alg)
+
+# “Edge of grid?” check (do we need a second pass?)
+edge_check <- map_df(results, function(x){
+  bt   <- x$best_params
+  grid <- x$cv_results %>% dplyr::select(dplyr::any_of(names(bt))) %>%
+    mutate(across(where(is.factor), as.character))
+
+  checks <- map2_lgl(names(bt), bt, function(p, val){
+    col <- grid[[p]]
+    # If column has only one unique value, edge check is irrelevant
+    u <- unique(col)
+    if (length(u) <= 1) return(FALSE)
+
+    if (is.numeric(col)) {
+      v <- suppressWarnings(as.numeric(val))
+      v %in% range(col, na.rm = TRUE)
+    } else {
+      v <- as.character(val)
+      u <- sort(unique(as.character(col)))
+      v %in% c(u[1], u[length(u)])
+    }
+  })
+
+  tibble(param = names(bt),
+         value = as.character(unlist(bt, use.names = FALSE)),
+         at_edge = checks)
+}, .id = "model_id") %>%
+  separate(model_id, into = c("response","set","alg"), sep = "_") %>%
+  relocate(response, set, alg, param, value, at_edge)
+
+edge_check %>% filter(at_edge)
+
+# Top variables (internal importance)
+top_vars <- function(x, k=10) x$var_importance %>% dplyr::slice_max(Overall, n=k)
+top_vars(results$max_A_rfr, 10)
+top_vars(results$max_A_xgb, 10)
+
+# Set the folder path
+output_dir <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/results"
+
+# Save tables
+readr::write_csv(metrics_overall, file.path(output_dir, "metrics_overall.csv"))
+readr::write_csv(metrics_by_site, file.path(output_dir, "metrics_by_site.csv"))
+```
+
+*rerunning rfr to account for adding information on best hyperparameters*
+```{r}
+# Re-run only RF models to save time
+rerun_rfr <- function(){
+  out <- list()
+  for (resp_key in c("max","mean","range")) {
+    df <- switch(resp_key, max=max_df, mean=mean_df, range=range_df)
+
+    A <- prep_dataset(df, resp_key, mode = "all")
+    out[[paste(resp_key,"A_rfr",sep="_")]] <- train_model(
+      data=A$data, response=A$response, predictors=A$predictors,
+      model_type="rfr", k=5
+    )
+
+    B <- prep_dataset(df, resp_key, mode = "remote")
+    out[[paste(resp_key,"B_rfr",sep="_")]] <- train_model(
+      data=B$data, response=B$response, predictors=B$predictors,
+      model_type="rfr", k=5
+    )
+  }
+  out
+}
+
+rfr_results <- rerun_rfr()
+# replace the RF entries in your main results list
+results[names(rfr_results)] <- rfr_results
+
+#recheck
+best_params_long <- map_df(results, ~{
+  bp <- tibble::as_tibble(.x$best_params)
+  # Make all columns character so pivot has a single type
+  bp %>%
+    mutate(across(everything(), as.character)) %>%
+    pivot_longer(everything(), names_to = "param", values_to = "value")
+}, .id = "model_id") %>%
+  separate(model_id, into = c("response","set","alg"), sep = "_") %>%
+  relocate(response,set,alg,param,value)
+
+best_params_long %>% arrange(response,set,alg,param)
+
+readr::write_csv(best_params_long,file.path(output_dir, "best_params_with_cv_metrics.csv"))
+```
+
+*Flag edge hits*
+```{r}
+edge_hits <- map_df(results, function(x){
+  bt   <- x$best_params
+  grid <- x$cv_results %>% select(any_of(names(bt))) %>%
+    mutate(across(where(is.factor), as.character))
+
+  tibble(
+    model_id = paste(x$response, x$predictors[1] %||% "", x$model_type, sep="_"),
+    param    = names(bt),
+    value    = as.character(unlist(bt, use.names = FALSE)),
+    at_edge  = map2_lgl(names(bt), bt, function(p, v){
+      col <- grid[[p]]
+      u <- sort(unique(col))
+      if (length(u) <= 1) return(FALSE)                 # constant -> no edge
+      if (is.numeric(col)) {
+        as.numeric(v) %in% range(col, na.rm = TRUE)
+      } else {
+        as.character(v) %in% c(u[1], u[length(u)])
+      }
+    })
+  )
+}, .id = "run") %>%
+  separate(run, into = c("response","set","alg"), sep = "_") %>%
+  relocate(response,set,alg,param,value,at_edge)
+
+edge_hits %>% filter(at_edge)
+
+```
+
+
