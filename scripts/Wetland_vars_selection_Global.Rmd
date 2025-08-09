@@ -15,7 +15,9 @@ library(tidyverse)
 library(broom)
 
 # Read data
-df <- read.csv("daily_wetlands_dataset.csv")
+df <- read.csv("C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/data/daily_wetlands_dataset.csv")
+
+names(df)
 
 # Define response variables
 responses <- c("mean_WT", "max_WT", "range_WT") 
@@ -63,10 +65,10 @@ names(best_predictors_all) <- responses
 # Get final list of predictors for each model (best + static)
 combined_predictor_lists <- map(best_predictors_all, ~ c(.x$predictor, static_predictors))
 
-# Subset original dataframe for each response model
+# Subset original dataframe for each response model, keeping Site and Datetime
 model_data <- map2(combined_predictor_lists, responses, function(vars, response) {
   df %>%
-    select(all_of(c(response, vars)))
+    select(all_of(c("Site", "Datetime", response, vars)))
 })
 
 # Named outputs
@@ -80,14 +82,21 @@ range_model_data <- model_data$range_WT
 ```{r}
 # Load additional packages
 library(caret)
+library(tidyverse)
+library(purrr)
 
 # Set correlation threshold
 cor_threshold <- 0.9
 
-# Function to remove highly correlated predictors (excluding the response variable)
+# Function to remove highly correlated predictors (excluding the response variable, Site, and Datetime)
 remove_correlated_predictors <- function(df, response, threshold = cor_threshold) {
-  # Extract predictor columns
-  predictors <- df %>% select(-all_of(response))
+  # Identify columns to exclude from correlation check
+  exclude_cols <- c(response, "Site", "Datetime")
+  
+  # Get predictor columns that are numeric
+  predictors <- df %>%
+    select(-all_of(exclude_cols)) %>%
+    select(where(is.numeric))
   
   # Compute correlation matrix
   cor_matrix <- cor(predictors, use = "pairwise.complete.obs")
@@ -108,8 +117,8 @@ model_data_uncorrelated <- map2(model_data, responses, remove_correlated_predict
 names(model_data_uncorrelated) <- responses
 
 # You now have:
-mean_model_final <- model_data_uncorrelated$mean_WT
-max_model_final  <- model_data_uncorrelated$max_WT
+mean_model_final  <- model_data_uncorrelated$mean_WT
+max_model_final   <- model_data_uncorrelated$max_WT
 range_model_final <- model_data_uncorrelated$range_WT
 
 # Optional: check which variables were removed
@@ -118,9 +127,18 @@ removed_vars <- map2(model_data, model_data_uncorrelated, function(orig, cleaned
 })
 names(removed_vars) <- responses
 
+# Check variable names
 names(mean_model_final)
 names(max_model_final)
 names(range_model_final)
+
+# Set the folder path
+output_dir <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/data"
+
+# Save each dataframe
+write.csv(mean_model_final,  file.path(output_dir, "mean_global_data.csv"),  row.names = FALSE)
+write.csv(max_model_final,   file.path(output_dir, "max_global_data.csv"),   row.names = FALSE)
+write.csv(range_model_final, file.path(output_dir, "range_global_data.csv"), row.names = FALSE)
 
 ```
 
