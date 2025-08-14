@@ -474,3 +474,106 @@ low_ranked
 # since the models are currently stable, i'm going to just keep all variables for now.
 
 ```
+```{r}
+# ---- Permutation importance for all global models ----
+# Needs: vip, dplyr, purrr, tidyr, tibble (plus your functions/objects already in memory)
+library(vip)
+library(dplyr)
+library(purrr)
+library(tidyr)
+library(tibble)
+
+# (belt-and-suspenders; vip will use this default if not passed)
+options(vip.smaller_is_better = TRUE)
+
+# 1) Loss function + predict wrapper (model-agnostic)
+rmse_loss <- function(truth, estimate) sqrt(mean((truth - estimate)^2, na.rm = TRUE))
+pred_wrap <- function(object, newdata) predict(object, newdata = newdata)
+
+# 2) Helper: rebuild the exact training data for a given model_id
+#    model_id format is "response_set_alg" (e.g., "max_A_xgb")
+get_train_frame <- function(model_id) {
+  parts <- strsplit(model_id, "_", fixed = TRUE)[[1]]
+  response_key <- parts[1]           # "max" | "mean" | "range"
+  set_key      <- parts[2]           # "A" | "B"
+  # pick source df
+  df_src <- switch(response_key,
+                   max   = max_df,
+                   mean  = mean_df,
+                   range = range_df)
+  # build like training
+  ps <- prep_dataset(df_src, response_key, mode = ifelse(set_key == "A", "all", "remote"))
+  list(df = ps$data, response = ps$response, predictors = ps$predictors)
+}
+
+# 3) Compute permutation importance for every model in results_refined
+#    nsim: number of permutations per feature (tweak for speed/precision)
+set.seed(42)
+perm_vi_all <- imap_dfr(results_refined, function(res, model_id) {
+
+  # Recreate the training data that model used
+  td <- get_train_frame(model_id)
+  combo <- td$df %>%
+    dplyr::select(dplyr::all_of(c(td$response, td$predictors))) %>%
+    tidyr::drop_na()
+  train_y <- combo[[td$response]]
+  train_x <- combo %>% dplyr::select(dplyr::all_of(td$predictors))
+
+  # Run permutation importance on the caret model object
+  vi_perm <- vip::vi_permute(
+    object             = res$fit_object,     # caret::train object
+    train              = train_x,
+    target             = train_y,
+    metric             = rmse_loss,          # or yardstick::rmse_vec
+    pred_wrapper       = pred_wrap,
+    nsim               = 20,                 # increase for smoother estimates
+    keep               = TRUE,
+    parallel           = FALSE,              # avoid nested parallelism
+    smaller_is_better  = TRUE
+  )
+
+  # Tidy + attach identifiers
+  parts <- strsplit(model_id, "_", fixed = TRUE)[[1]]
+  tibble(
+    response  = parts[1],
+    set       = parts[2],
+    alg       = parts[3],
+    Variable  = vi_perm$Variable,
+    Importance= vi_perm$Importance,
+    Stderr    = vi_perm$StDev,
+    type      = "permutation"
+  )
+})
+
+# 4) (Optional) Bind with internal importance you already saved in results_refined
+internal_vi_all <- imap_dfr(results_refined, function(res, model_id) {
+  parts <- strsplit(model_id, "_", fixed = TRUE)[[1]]
+  res$var_importance %>%
+    as_tibble() %>%
+    transmute(
+      response  = parts[1],
+      set       = parts[2],
+      alg       = parts[3],
+      Variable,
+      Importance = Overall,
+      Stderr     = NA_real_,
+      type       = "internal"
+    )
+})
+
+varimp_combined <- bind_rows(internal_vi_all, perm_vi_all)
+
+# 5) Save and/or inspect
+output_dir <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/results"
+readr::write_csv(perm_vi_all,    file.path(output_dir, "varimp_permutation_refined.csv"))
+readr::write_csv(varimp_combined, file.path(output_dir, "varimp_internal_vs_permutation_refined.csv"))
+
+# Quick peek: top predictors by algorithm & set (permutation importance)
+perm_vi_all %>%
+  group_by(response, set, alg) %>%
+  slice_max(Importance, n = 10, with_ties = FALSE) %>%
+  ungroup()
+
+```
+
+
