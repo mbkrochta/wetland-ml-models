@@ -402,9 +402,9 @@ edge_check <- imap_dfr(results_refined, function(x, nm){
 edge_hits <- edge_check %>% filter(isTRUE(at_edge))
 
 if (nrow(edge_hits) == 0) {
-  message("✅ No parameters hit grid edges.")
+  message("No parameters hit grid edges.")
 } else {
-  message("⚠️ Some parameters hit grid edges.")
+  message("Some parameters hit grid edges.")
 }
 
 edge_hits
@@ -474,44 +474,349 @@ low_ranked
 # since the models are currently stable, i'm going to just keep all variables for now.
 
 ```
-```{r}
-# ---- Permutation importance for all global models ----
-# Needs: vip, dplyr, purrr, tidyr, tibble (plus your functions/objects already in memory)
-library(vip)
-library(dplyr)
-library(purrr)
-library(tidyr)
-library(tibble)
 
-# (belt-and-suspenders; vip will use this default if not passed)
+**Global lme models**
+
+*setting up VIF function, AR(1) correlation structure*
+```{r}
+library(nlme)
+library(car)        
+library(performance)
+library(broom)
+
+# Iteratively drop the highest-VIF predictor until all VIF <= thresh
+vif_prune <- function(train_df, response, preds, thresh = 5) {
+  keep <- preds
+  dropped <- character(0)
+  # guard: remove constant / near-constant columns
+  nzv <- keep[ sapply(keep, function(v) sd(train_df[[v]], na.rm = TRUE) == 0) ]
+  if (length(nzv)) {
+    keep <- setdiff(keep, nzv)
+    dropped <- c(dropped, nzv)
+  }
+  repeat {
+    if (length(keep) == 0L) break
+    fm <- as.formula(paste(response, "~", paste(keep, collapse = "+")))
+    # try-catch in case of singularities
+    fit_lm <- try(lm(fm, data = train_df), silent = TRUE)
+    if (inherits(fit_lm, "try-error")) break
+    v <- suppressWarnings(car::vif(fit_lm))
+    vmax <- max(v, na.rm = TRUE)
+    if (is.infinite(vmax) || is.nan(vmax)) break
+    if (vmax <= thresh) break
+    drop_this <- names(v)[which.max(v)]
+    keep <- setdiff(keep, drop_this)
+    dropped <- c(dropped, drop_this)
+  }
+  list(keep = keep, dropped = dropped)
+}
+
+# Build AR(1) correlation structure on a Date column
+make_cor_ar1 <- function(df, date_col = "Datetime", site_col = "Site") {
+  # nlme wants a numeric time; use days since origin
+  corAR1(form = as.formula(paste0("~ as.numeric(", date_col, ") | ", site_col)))
+}
+```
+
+*extra functions for running LME and evaluating VIF*
+```{r}
+# --- helper to fit lme safely (avoids scoping issue with 'fixed' argument)
+fit_lme_safe <- function(fixed_formula, data, site_col, date_col) {
+  do.call(nlme::lme, list(
+    fixed       = fixed_formula,
+    random      = as.formula(paste0("~ 1 | ", site_col)),
+    correlation = make_cor_ar1(data, date_col = date_col, site_col = site_col),
+    data        = data,
+    method      = "REML",
+    na.action   = na.omit,
+    control     = nlme::lmeControl(msMaxIter = 200, msMaxEval = 400)
+  ))
+}
+
+# --- safe VIF (long) utility used later to build the VIF log
+safe_vif_long <- function(df, response, preds) {
+  preds <- unique(preds)
+  preds <- preds[!is.na(preds)]
+  preds <- preds[preds %in% names(df)]
+  if (length(preds) == 0L) {
+    return(tibble::tibble(predictor = character(0), vif = numeric(0)))
+  }
+  fm <- as.formula(paste(response, "~", paste(preds, collapse = "+")))
+  v <- try(suppressWarnings(car::vif(stats::lm(fm, data = df))), silent = TRUE)
+  if (inherits(v, "try-error")) {
+    return(tibble::tibble(predictor = preds, vif = NA_real_))
+  }
+  if (is.matrix(v)) v <- diag(v) # handle GVIF matrix case
+  v <- as.numeric(v)
+  v[is.na(v)] <- 1.0             # single-predictor fallback
+  tibble::tibble(predictor = preds, vif = v)
+}
+
+```
+
+
+*LME model training fxn*
+```{r}
+tidy_lme_fixed <- function(fit) {
+  tt <- summary(fit)$tTable
+  tibble::tibble(
+    term      = rownames(tt),
+    estimate  = as.numeric(tt[, "Value"]),
+    std.error = as.numeric(tt[, "Std.Error"]),
+    df        = as.numeric(tt[, "DF"]),
+    statistic = as.numeric(tt[, "t-value"]),
+    p.value   = as.numeric(tt[, "p-value"])
+  )
+}
+
+
+train_lme_global <- function(data,
+                             response,
+                             predictors,
+                             k = 5,
+                             site_col = "Site",
+                             date_col = "Datetime",
+                             vif_thresh = 5) {
+
+  # Keep only needed cols; drop rows with NA in response/preds
+  base_df <- data %>%
+    dplyr::select(all_of(c(site_col, date_col, response, predictors))) %>%
+    tidyr::drop_na()
+
+  # Build weekly folds (your existing helper)
+  folds <- make_weekly_folds(base_df, k = k, date_col = date_col)
+
+  # Storage
+  oof_list <- vector("list", k)
+  fold_kept_preds <- vector("list", k)
+  fold_dropped_preds <- vector("list", k)
+
+  for (i in seq_len(k)) {
+    val_idx <- folds$indexOut[[i]]
+    trn_idx <- folds$index[[i]]
+
+    train_df <- base_df[trn_idx, , drop = FALSE]
+    val_df   <- base_df[val_idx, , drop = FALSE]
+
+    # Per-fold VIF pruning (no leakage)
+    vp <- vif_prune(train_df, response, predictors, thresh = vif_thresh)
+    kept <- vp$keep
+
+          # Build fixed formula
+    if (length(kept) > 0) {
+      fixed_formula <- reformulate(termlabels = kept, response = response)
+    } else {
+      fixed_formula <- as.formula(paste(response, "~ 1"))
+    }
+
+    # Fit via do.call() so 'fixed' is the actual formula, not a dangling symbol
+    fit <- fit_lme_safe(fixed_formula, train_df, site_col, date_col)
+
+
+    # Predict on validation fold.
+    # Use level=1 to include site random intercepts (sites exist in train due to week blocking)
+    val_x <- val_df %>% dplyr::select(all_of(c(site_col, date_col, response, kept)))
+    val_x <- tidyr::drop_na(val_x)  # ensure no NA for predictors used in this fold
+
+    preds <- predict(fit, newdata = val_x, level = 1)
+
+    oof_list[[i]] <- tibble(
+      Site = val_x[[site_col]],
+      Date = val_x[[date_col]],
+      obs  = val_x[[response]],
+      pred = as.numeric(preds)
+    )
+
+    fold_kept_preds[[i]]    <- kept
+    fold_dropped_preds[[i]] <- vp$dropped
+  }
+
+  # Combine OOF; compute metrics
+  oof <- bind_rows(oof_list)
+  mets <- compute_metrics(oof, truth_col = "obs", pred_col = "pred", site_col = "Site")
+
+  # Fit a final model on full data (with VIF pruning done on full data for reporting)
+  vp_full <- vif_prune(base_df, response, predictors, vif_thresh)
+  kept_full    <- if (length(vp_full$keep) > 0) vp_full$keep else character(0)
+  dropped_full <- vp_full$dropped
+
+  if (length(kept_full) > 0) {
+    fixed_formula_full <- reformulate(termlabels = kept_full, response = response)
+  } else {
+    fixed_formula_full <- as.formula(paste(response, "~ 1"))
+  }
+
+  fit_full <- fit_lme_safe(fixed_formula_full, base_df, site_col, date_col)
+
+  # Extract fixed effects table
+  coefs <- tidy_lme_fixed(fit_full)
+
+  # AR(1) parameter (phi)
+  phi <- tryCatch(
+    as.numeric(coef(fit_full$modelStruct$corStruct, unconstrained = FALSE)),
+    error = function(e) NA_real_
+  )
+
+  list(
+    response          = response,
+    model_type        = "lme",
+    predictors_init   = predictors,
+    vif_thresh        = vif_thresh,
+    fold_kept         = fold_kept_preds,
+    fold_dropped      = fold_dropped_preds,
+    kept_full         = kept_full,
+    dropped_full      = dropped_full,
+    metrics_overall   = mets$overall,
+    metrics_by_site   = mets$by_site,
+    oof_predictions   = oof,
+    fit_object        = fit_full,
+    fixed_effects     = coefs,
+    ar1_phi           = phi
+  )
+}
+```
+
+
+*model running fxn for each set*
+```{r}
+run_all_lme <- function(k = 5, vif_thresh = 5) {
+  results <- list()
+  for (resp_key in c("max","mean","range")) {
+    df <- switch(resp_key, max = max_df, mean = mean_df, range = range_df)
+
+    # --- Set A: All predictors (5 sites)
+    A <- prep_dataset(df, resp_key, mode = "all")
+    results[[paste(resp_key, "A_lme", sep = "_")]] <- train_lme_global(
+      data = A$data, response = A$response, predictors = A$predictors,
+      k = k, vif_thresh = vif_thresh
+    )
+
+    # --- Set B: Remote-only (7 sites)
+    B <- prep_dataset(df, resp_key, mode = "remote")
+    results[[paste(resp_key, "B_lme", sep = "_")]] <- train_lme_global(
+      data = B$data, response = B$response, predictors = B$predictors,
+      k = k, vif_thresh = vif_thresh
+    )
+  }
+  results
+}
+
+```
+
+*Run models and export results*
+```{r}
+# Run
+results_lme <- run_all_lme(k = 5, vif_thresh = 5)
+
+# Overall metrics table
+metrics_overall_lme <- purrr::imap_dfr(results_lme, ~ .x$metrics_overall, .id = "model_id") %>%
+  tidyr::separate(model_id, into = c("response","set","alg"), sep = "_") %>%
+  dplyr::mutate(alg = "lme") %>%
+  dplyr::relocate(response, set, alg)
+
+# By-site metrics (with OOF counts)
+metrics_by_site_lme <- purrr::imap_dfr(results_lme, function(x, nm){
+  n_by_site <- x$oof_predictions %>% count(Site, name = "n_oof")
+  x$metrics_by_site %>% left_join(n_by_site, by = "Site") %>% mutate(model_id = nm)
+}, .id = NULL) %>%
+  tidyr::separate(model_id, into = c("response","set","alg"), sep = "_") %>%
+  dplyr::mutate(alg = "lme") %>%
+  dplyr::relocate(response, set, alg, Site)
+
+# Fixed effects & AR(1)
+fixed_effects_lme <- purrr::imap_dfr(results_lme, ~{
+  .x$fixed_effects %>% mutate(model_id = .y, ar1_phi = .x$ar1_phi)
+}, .id = NULL) %>%
+  tidyr::separate(model_id, into = c("response","set","alg"), sep = "_") %>%
+  dplyr::mutate(alg = "lme") %>%
+  dplyr::relocate(response, set, alg, ar1_phi)
+
+# Save
+output_dir <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/results"
+readr::write_csv(metrics_overall_lme, file.path(output_dir, "lme_metrics_overall.csv"))
+readr::write_csv(metrics_by_site_lme, file.path(output_dir, "lme_metrics_by_site.csv"))
+readr::write_csv(fixed_effects_lme,  file.path(output_dir, "lme_fixed_effects.csv"))
+
+```
+
+*VIF table*
+```{r}
+# ---- Build ONE long VIF log file (before/after + dropped) ----
+# Uses full-data frames to compute VIFs consistently per (response, set)
+vif_log_long <- purrr::imap_dfr(results_lme, function(res, model_id) {
+  parts <- strsplit(model_id, "_", fixed = TRUE)[[1]]
+  response <- parts[1]
+  set_key  <- parts[2]
+  alg      <- "lme"
+
+  # Recreate the full dataset used for this response+set (same logic as your runners)
+  df_src <- switch(response, max = max_df, mean = mean_df, range = range_df)
+  ps <- prep_dataset(df_src, response, mode = ifelse(set_key == "A", "all", "remote"))
+  full_df <- ps$data
+
+  # BEFORE: VIF on all candidate predictors (predictors_init)
+  vif_before <- safe_vif_long(full_df, res$response, res$predictors_init) %>%
+    dplyr::mutate(stage = "before")
+
+  # AFTER: VIF on kept_full (if none kept, produce empty row set)
+  vif_after <- safe_vif_long(full_df, res$response, res$kept_full) %>%
+    dplyr::mutate(stage = "after")
+
+  # DROPPED: original VIFs for dropped vars (from 'before')
+  dropped_info <- vif_before %>%
+    dplyr::filter(predictor %in% res$dropped_full) %>%
+    dplyr::mutate(stage = "dropped")
+
+  dplyr::bind_rows(vif_before, vif_after, dropped_info) %>%
+    dplyr::mutate(
+      response = response,
+      set      = set_key,
+      alg      = alg,
+      dropped  = stage == "dropped"
+    ) %>%
+    dplyr::select(response, set, alg, stage, predictor, vif, dropped)
+})
+
+# Save single long file
+readr::write_csv(vif_log_long, file.path(output_dir, "lme_vif_log_long.csv"))
+
+```
+
+*Comparing variable importances across all models*
+```{r}
+# Variable importance for ALL models (RFR, XGB, LME) via permutation (RMSE increase)
+
+library(vip)
+
 options(vip.smaller_is_better = TRUE)
 
-# 1) Loss function + predict wrapper (model-agnostic)
+# ---- metric + generic predict wrappers ----
 rmse_loss <- function(truth, estimate) sqrt(mean((truth - estimate)^2, na.rm = TRUE))
-pred_wrap <- function(object, newdata) predict(object, newdata = newdata)
+pred_wrap_caret <- function(object, newdata) predict(object, newdata = newdata)
 
-# 2) Helper: rebuild the exact training data for a given model_id
-#    model_id format is "response_set_alg" (e.g., "max_A_xgb")
+# For LME we must re-attach grouping/time columns for level=1 predictions
+# use fixed-effects only (level = 0) to avoid grouping issues during permutation
+make_lme_pred_wrapper <- function(level = 0) {
+  function(object, newdata) {
+    predict(object, newdata = newdata, level = level)
+  }
+}
+
+# ---- reuse dataset builder to reconstruct training frames ----
+# model_id for ML looks like "max_A_xgb" or "mean_B_rfr"
 get_train_frame <- function(model_id) {
   parts <- strsplit(model_id, "_", fixed = TRUE)[[1]]
-  response_key <- parts[1]           # "max" | "mean" | "range"
-  set_key      <- parts[2]           # "A" | "B"
-  # pick source df
-  df_src <- switch(response_key,
-                   max   = max_df,
-                   mean  = mean_df,
-                   range = range_df)
-  # build like training
+  response_key <- parts[1]  # "max" | "mean" | "range"
+  set_key      <- parts[2]  # "A" | "B"
+  df_src <- switch(response_key, max = max_df, mean = mean_df, range = range_df)
   ps <- prep_dataset(df_src, response_key, mode = ifelse(set_key == "A", "all", "remote"))
   list(df = ps$data, response = ps$response, predictors = ps$predictors)
 }
 
-# 3) Compute permutation importance for every model in results_refined
-#    nsim: number of permutations per feature (tweak for speed/precision)
 set.seed(42)
-perm_vi_all <- imap_dfr(results_refined, function(res, model_id) {
 
-  # Recreate the training data that model used
+# Permutation importance for ML models (caret: XGB/RFR) 
+perm_vi_ml <- purrr::imap_dfr(results_refined, function(res, model_id) {
   td <- get_train_frame(model_id)
   combo <- td$df %>%
     dplyr::select(dplyr::all_of(c(td$response, td$predictors))) %>%
@@ -519,41 +824,91 @@ perm_vi_all <- imap_dfr(results_refined, function(res, model_id) {
   train_y <- combo[[td$response]]
   train_x <- combo %>% dplyr::select(dplyr::all_of(td$predictors))
 
-  # Run permutation importance on the caret model object
   vi_perm <- vip::vi_permute(
-    object             = res$fit_object,     # caret::train object
-    train              = train_x,
-    target             = train_y,
-    metric             = rmse_loss,          # or yardstick::rmse_vec
-    pred_wrapper       = pred_wrap,
-    nsim               = 20,                 # increase for smoother estimates
-    keep               = TRUE,
-    parallel           = FALSE,              # avoid nested parallelism
-    smaller_is_better  = TRUE
+    object            = res$fit_object,   # caret::train
+    train             = train_x,
+    target            = train_y,
+    metric            = rmse_loss,
+    pred_wrapper      = pred_wrap_caret,
+    nsim              = 20,
+    keep              = TRUE,
+    parallel          = FALSE,
+    smaller_is_better = TRUE
   )
 
-  # Tidy + attach identifiers
   parts <- strsplit(model_id, "_", fixed = TRUE)[[1]]
-  tibble(
-    response  = parts[1],
-    set       = parts[2],
-    alg       = parts[3],
-    Variable  = vi_perm$Variable,
-    Importance= vi_perm$Importance,
-    Stderr    = vi_perm$StDev,
-    type      = "permutation"
+  tibble::tibble(
+    response   = parts[1],
+    set        = parts[2],
+    alg        = parts[3],                # "xgb" or "rfr"
+    Variable   = vi_perm$Variable,
+    Importance = vi_perm$Importance,
+    Stderr     = vi_perm$StDev,
+    type       = "permutation"
   )
 })
 
-# 4) (Optional) Bind with internal importance you already saved in results_refined
-internal_vi_all <- imap_dfr(results_refined, function(res, model_id) {
+# Permutation importance for LME models (fixed-effects only) 
+perm_vi_lme <- purrr::imap_dfr(results_lme, function(res, model_id) {
+  parts <- strsplit(model_id, "_", fixed = TRUE)[[1]]
+  response_key <- parts[1]
+  set_key      <- parts[2]
+
+  # Rebuild the same full dataset used for this response+set
+  frame <- get_train_frame(paste(response_key, set_key, "x", sep = "_"))
+
+  kept <- res$kept_full
+  if (length(kept) == 0L) {
+    return(tibble::tibble(
+      response = response_key, set = set_key, alg = "lme",
+      Variable = character(0), Importance = numeric(0), Stderr = numeric(0), type = "permutation"
+    ))
+  }
+
+  # Construct aligned training frame; include Site/Datetime just in case
+  combo <- frame$df %>%
+    dplyr::select(dplyr::all_of(c("Site", "Datetime", frame$response, kept))) %>%
+    tidyr::drop_na()
+
+  train_x <- combo %>% dplyr::select(dplyr::all_of(kept))
+  train_y <- combo[[frame$response]]
+
+  # Fixed-effects predictions (level = 0) — avoids random-effects grouping errors
+  pred_wrap_lme <- make_lme_pred_wrapper(level = 0)
+
+  vi_perm <- vip::vi_permute(
+    object            = res$fit_object,   # nlme::lme
+    train             = train_x,
+    target            = train_y,
+    metric            = rmse_loss,
+    pred_wrapper      = pred_wrap_lme,
+    nsim              = 20,
+    keep              = TRUE,
+    parallel          = FALSE,
+    smaller_is_better = TRUE
+  )
+
+  tibble::tibble(
+    response   = response_key,
+    set        = set_key,
+    alg        = "lme",
+    Variable   = vi_perm$Variable,
+    Importance = vi_perm$Importance,
+    Stderr     = vi_perm$StDev,
+    type       = "permutation"
+  )
+})
+
+
+# include internal importance for ML models (caret::varImp)
+internal_vi_all <- purrr::imap_dfr(results_refined, function(res, model_id) {
   parts <- strsplit(model_id, "_", fixed = TRUE)[[1]]
   res$var_importance %>%
-    as_tibble() %>%
-    transmute(
-      response  = parts[1],
-      set       = parts[2],
-      alg       = parts[3],
+    tibble::as_tibble() %>%
+    dplyr::transmute(
+      response   = parts[1],
+      set        = parts[2],
+      alg        = parts[3],
       Variable,
       Importance = Overall,
       Stderr     = NA_real_,
@@ -561,19 +916,17 @@ internal_vi_all <- imap_dfr(results_refined, function(res, model_id) {
     )
 })
 
-varimp_combined <- bind_rows(internal_vi_all, perm_vi_all)
+# Combine & save 
+varimp_perm_all <- dplyr::bind_rows(perm_vi_ml, perm_vi_lme)
+varimp_combined <- dplyr::bind_rows(internal_vi_all, varimp_perm_all)
 
-# 5) Save and/or inspect
-output_dir <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/results"
-readr::write_csv(perm_vi_all,    file.path(output_dir, "varimp_permutation_refined.csv"))
-readr::write_csv(varimp_combined, file.path(output_dir, "varimp_internal_vs_permutation_refined.csv"))
+readr::write_csv(varimp_perm_all,  file.path(output_dir, "varimp_permutation_ALL_algorithms.csv"))
+readr::write_csv(varimp_combined,  file.path(output_dir, "varimp_internal_vs_permutation_ALL_algorithms.csv"))
 
-# Quick peek: top predictors by algorithm & set (permutation importance)
-perm_vi_all %>%
-  group_by(response, set, alg) %>%
-  slice_max(Importance, n = 10, with_ties = FALSE) %>%
-  ungroup()
-
+# Quick peek: top 10 by permutation for each (response,set,alg)
+varimp_perm_all %>%
+  dplyr::group_by(response, set, alg) %>%
+  dplyr::slice_max(Importance, n = 10, with_ties = FALSE) %>%
+  dplyr::ungroup()
 ```
-
 
