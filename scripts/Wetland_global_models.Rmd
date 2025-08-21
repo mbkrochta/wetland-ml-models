@@ -930,3 +930,89 @@ varimp_perm_all %>%
   dplyr::ungroup()
 ```
 
+*Variable-importance plots*
+```{r}
+library(forcats)
+library(stringr)
+
+# 1) Filter to Set A (full predictors)
+vi_A <- varimp_perm_all %>%
+  dplyr::filter(set == "A") %>%
+  dplyr::mutate(
+    alg = dplyr::recode(alg,
+      "lme" = "LME",
+      "rfr" = "RFR",
+      "xgb" = "XGB",
+      .default = alg
+    ),
+    response = dplyr::recode(response,
+      "max" = "Max",
+      "mean" = "Mean",
+      "range" = "Range",
+      .default = response
+    ),
+    alg = factor(alg, levels = c("LME","RFR","XGB")),
+    response = factor(response, levels = c("Max","Mean","Range"))
+  )
+
+# 2) Compute ordering: per-response mean importance across algorithms
+mean_imp <- vi_A %>%
+  group_by(response, Variable) %>%
+  summarise(mean_imp = mean(Importance, na.rm = TRUE), .groups = "drop")
+
+# 3) Keep top-k variables per response by that mean importance (tune top_k)
+top_k <- 12
+top_vars <- mean_imp %>%
+  group_by(response) %>%
+  slice_max(mean_imp, n = top_k, with_ties = FALSE) %>%
+  ungroup()
+
+# 4) Build plotting frame: join mean_imp so we can order by it
+plot_df <- vi_A %>%
+  inner_join(top_vars, by = c("response","Variable")) %>%  # keeps only top-k per response
+  mutate(
+    # Create a per-response key so we can order inside facets consistently
+    var_key = paste0(response, "__", Variable)
+  )
+
+# 5) Optional cosmetic clamp for tiny negatives (noise near zero)
+vi_eps <- 0.00  
+plot_df <- plot_df %>%
+  mutate(Importance = ifelse(abs(Importance) < vi_eps, 0, Importance))
+
+# 6) Plot — order by mean_imp; show same order across alg facets for a response
+p_vi_A <- ggplot(
+  plot_df,
+  aes(x = fct_reorder(var_key, mean_imp), y = Importance)
+) +
+  geom_col(width = 0.75) +
+  geom_errorbar(aes(ymin = pmax(0, Importance - Stderr),
+                    ymax = Importance + Stderr),
+                width = 0.2, alpha = 0.5) +
+  geom_hline(yintercept = 0, linewidth = 0.4, linetype = "dashed") +
+  coord_flip() +
+  facet_grid(response ~ alg, scales = "free_y", space = "free_y") +
+  scale_x_discrete(labels = function(x) sub("^.*__", "", x)) +  
+  labs(
+    x = "Predictor",
+    y = "Increase in RMSE (°C)"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    panel.grid.minor = element_blank(),
+    strip.text = element_text(face = "bold"),
+    plot.title = element_text(face = "bold"),
+    axis.title.y = element_text(margin = margin(r = 10)),
+    panel.spacing = unit(0.5, "lines"),         # space between facet panels
+    plot.margin   = margin(10, 10, 10, 10)      # margin around whole plot (top, right, bottom, left)
+  )
+
+
+print(p_vi_A)
+
+# Save
+ggsave("C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/figures/varimp_global.png",
+       p_vi_A, width = 8.5, height = 9, units = "in", dpi = 300, bg = "white")
+
+```
+
