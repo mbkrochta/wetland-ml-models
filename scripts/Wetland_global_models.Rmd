@@ -21,6 +21,11 @@ library(stringr)
 library(tidyr)
 library(purrr)
 library(doParallel)
+library(cowplot)
+library(scales)
+library(grid) 
+library(patchwork)
+
 set.seed(42)        # Reproducibility for folds/shuffles
 ```
 
@@ -1013,6 +1018,155 @@ print(p_vi_A)
 # Save
 ggsave("C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/figures/varimp_global.png",
        p_vi_A, width = 8.5, height = 9, units = "in", dpi = 300, bg = "white")
+
+```
+
+*Pred vs Obs plots
+```{r}
+# helper: label mapping
+resp_lab <- c(max = "Max WT", mean = "Mean WT", range = "Range WT")
+alg_lab  <- c(lme = "LME", rfr = "RFR", xgb = "XGB")
+
+# 1) Gather OOF predictions from your stored objects:
+#    - results_refined: contains *_A_rfr and *_A_xgb
+#    - results_lme:     contains *_A_lme
+collect_oof_setA <- function(results_refined, results_lme) {
+  # From RF/XGB
+  df_ml <- purrr::imap_dfr(results_refined, function(x, nm){
+    # keep only Set A models
+    parts <- strsplit(nm, "_")[[1]]  # c(response, set, alg)
+    if (length(parts) != 3) return(NULL)
+    if (parts[2] != "A") return(NULL)
+    tibble(
+      response = parts[1],
+      set      = parts[2],
+      alg      = parts[3],
+      Site     = x$oof_predictions$Site,
+      Date     = x$oof_predictions$Date,
+      obs      = x$oof_predictions$obs,
+      pred     = x$oof_predictions$pred
+    )
+  })
+
+  # From LME
+  df_lme <- purrr::imap_dfr(results_lme, function(x, nm){
+    parts <- strsplit(nm, "_")[[1]]
+    if (length(parts) != 3) return(NULL)
+    if (parts[2] != "A") return(NULL)
+    tibble(
+      response = parts[1],
+      set      = parts[2],
+      alg      = "lme",
+      Site     = x$oof_predictions$Site,
+      Date     = x$oof_predictions$Date,
+      obs      = x$oof_predictions$obs,
+      pred     = x$oof_predictions$pred
+    )
+  })
+
+  bind_rows(df_ml, df_lme) %>%
+    mutate(
+      response = factor(response, levels = c("max","mean","range"), labels = resp_lab),
+      alg      = factor(alg,      levels = c("lme","rfr","xgb"),   labels = alg_lab)
+    ) %>%
+    arrange(response, alg, Site, Date)
+}
+
+oof_A <- collect_oof_setA(results_refined, results_lme)
+
+
+# Distinct site colors + shapes
+site_cols   <- c(Anvil="#D55E00", Butte="#0072B2", Crater="#009E73", Pint="#CC79A7", Sam="#E69F00")
+site_shapes <- c(Anvil=16, Butte=17, Crater=15, Pint=18, Sam=8)
+
+# Integer breaks with ~5–7 ticks
+int_breaks <- function(lims, target = 6L) {
+  lo <- floor(lims[1]); hi <- ceiling(lims[2])
+  span <- hi - lo
+  step <- max(1L, round(span / target))
+  seq(lo, hi, by = step)
+}
+
+# One response panel (3 rows by model). Lines ABOVE points. 1:1 aspect. Integer ticks.
+make_panel <- function(dat, resp_label, show_strips = TRUE) {
+  dd <- dat %>% filter(response == resp_label)
+
+  # Per-response limits with small padding
+  lims_raw <- range(c(dd$obs, dd$pred), na.rm = TRUE)
+  pad      <- diff(lims_raw) * 0.04
+  lims     <- c(lims_raw[1] - pad, lims_raw[2] + pad)
+
+  # Integer ticks (same count-ish across responses)
+  brk <- int_breaks(lims, target = 6L)
+
+  # Per-facet 1:1 (so it ALWAYS draws, and appears in the legend)
+  ones <- dd %>%
+    distinct(alg) %>%
+    mutate(slope = 1, intercept = 0)
+
+  p <- ggplot(dd, aes(obs, pred)) +
+    # points first
+    geom_point(aes(color = Site, shape = Site), alpha = 0.8, size = 2.0, stroke = 0.25) +
+    # lines ABOVE points
+    geom_abline(
+      data = ones,
+      aes(slope = slope, intercept = intercept, linetype = "1:1"),
+      linewidth = 0.8, alpha = 0.95, inherit.aes = FALSE
+    ) +
+    geom_smooth(aes(linetype = "Fitted"), method = "lm", se = FALSE,
+                linewidth = 1.0, alpha = 1.0) +
+    facet_grid(rows = vars(alg)) +
+    coord_equal(ratio = 1) +
+    scale_x_continuous(limits = range(brk), breaks = brk, minor_breaks = NULL,
+                       labels = scales::label_number(accuracy = 1)) +
+    scale_y_continuous(limits = range(brk), breaks = brk, minor_breaks = NULL,
+                       labels = scales::label_number(accuracy = 1)) +
+    scale_color_manual(values = site_cols, name = "Site") +
+    scale_shape_manual(values = site_shapes, name = "Site") +
+    scale_linetype_manual(values = c("1:1" = "dashed", "Fitted" = "solid"), name = "") +
+    labs(x = "Observed (°C)", y = "Predicted (°C)") +
+    theme_minimal(base_size = 12) +
+    theme(
+      panel.grid.minor = element_blank(),
+      panel.grid.major = element_line(linewidth = 0.35),
+      strip.text.y     = if (show_strips) element_text(face = "bold") else element_blank(),
+      strip.background = if (show_strips) element_rect(fill = NA, colour = NA) else element_blank(),
+      legend.position  = "bottom",
+      panel.spacing    = unit(6, "pt"),
+      plot.margin      = unit(c(3, 4, 3, 4), "pt")
+    )
+
+  p
+}
+
+# Build columns: only the RIGHT column shows the facet (model) labels
+p_max   <- make_panel(oof_A, "Max WT",  show_strips = FALSE)
+p_mean  <- make_panel(oof_A, "Mean WT", show_strips = FALSE)
+p_range <- make_panel(oof_A, "Range WT", show_strips = TRUE)   # <- model labels only here
+
+# Headers
+hdr <- function(txt) ggplot() + theme_void() +
+  annotate("text", x = 0.5, y = 0.5, label = txt, fontface = "bold", size = 5)
+
+col1 <- wrap_plots(hdr("Max WT"),   p_max,   ncol = 1, heights = c(0.06, 1))
+col2 <- wrap_plots(hdr("Mean WT"),  p_mean,  ncol = 1, heights = c(0.06, 1))
+col3 <- wrap_plots(hdr("Range WT"), p_range, ncol = 1, heights = c(0.06, 1))
+
+# Combine, collect ONE legend, keep columns fairly tight
+combined <- (col1 | col2 | col3) +
+  plot_layout(guides = "collect", widths = c(1, 1, 1)) &
+  theme(
+    legend.position = "bottom",
+    panel.spacing.x = unit(6, "pt"),
+    plot.margin     = unit(c(2, 2, 2, 2), "pt")
+  )
+
+# Save
+fig_dir <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/figures"
+if (!dir.exists(fig_dir)) dir.create(fig_dir, recursive = TRUE, showWarnings = FALSE)
+
+ggsave(file.path(fig_dir, "obs_vs_pred_plot.png"),
+       combined, width = 14, height = 8.8, units = "in", dpi = 300, bg = "white")
 
 ```
 
