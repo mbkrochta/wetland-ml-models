@@ -1,0 +1,268 @@
+---
+title: "Wetland_vars_selection_Local"
+author: "Michael Krochta"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+*loading in data, defining predictor groups, cor threshold*
+```{r}
+library(tidyverse)
+library(broom)
+library(purrr)
+library(caret)
+library(tidyr)
+
+# Read data 
+df <- read.csv("C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/data/daily_wetlands_dataset.csv")
+
+# Responses
+responses <- c("mean_WT", "max_WT", "range_WT")
+
+# Predictor groups (same as global)
+predictor_groups <- list(
+  Solar    = c("Solar_daily", "Solar_2d", "Solar_3d", "Solar_7d"),
+  WL_mean  = c("WL_daily_mean", "WL_mean_2day", "WL_mean_3day", "WL_mean_7day"),
+  WL_max   = c("WL_daily_max", "WL_max_2day", "WL_max_3day", "WL_max_7day"),
+  WL_min   = c("WL_daily_min", "WL_min_2day", "WL_min_3day", "WL_min_7day"),
+  Air_tmean= c("Air_tmean", "Air_tmean_2day", "Air_tmean_3day", "Air_tmean_7day"),
+  Air_tmax = c("Air_tmax", "Air_tmax_2day", "Air_tmax_3day", "Air_tmax_7day"),
+  Air_tmin = c("Air_tmin", "Air_tmin_2day", "Air_tmin_3day", "Air_tmin_7day"),
+  GWT_mean = c("GWT_mean", "GWT_mean_2day", "GWT_mean_3day", "GWT_mean_7day"),
+  GWT_max  = c("GWT_max", "GWT_max_2day", "GWT_max_3day", "GWT_max_7day"),
+  GWT_min  = c("GWT_min", "GWT_min_2day", "GWT_min_3day", "GWT_min_7day"),
+  GWL_mean = c("GWL_mean", "GWL_mean_2day", "GWL_mean_3day", "GWL_mean_7day"),
+  GWL_max  = c("GWL_max", "GWL_max_2day", "GWL_max_3day", "GWL_max_7day"),
+  GWL_min  = c("GWL_min", "GWL_min_2day", "GWL_min_3day", "GWL_min_7day"),
+  ppt      = c("ppt", "ppt_7day")
+)
+
+# Static predictors
+static_predictors <- c(
+  "Air_trange", "WL_daily_range", "GWT_range", "GWL_range", "Water_area_m2_3d",
+  "Elev_m", "Size_km2"
+)
+
+# Correlation threshold 
+cor_threshold <- 0.90
+```
+
+*Fitting site-level lms to find best preds, removing collinear or near-zero-vars preds*
+```{r}
+# For a single site-data frame and one response, pick best predictor per group
+find_best_predictors_site <- function(df_site, response_var) {
+  map_df(names(predictor_groups), function(gname) {
+    vars <- intersect(predictor_groups[[gname]], names(df_site))
+    if (length(vars) == 0) return(tibble(group = character(), predictor = character(), adj.r.squared = double()))
+    
+    # Fit univariate LMs safely, skip if not enough data
+    metrics <- vars %>%
+      set_names() %>%
+      map(~ {
+        # Require at least two non-NA rows for response and this predictor
+        dat <- df_site %>% select(any_of(c(response_var, .x))) %>% drop_na()
+        if (nrow(dat) < 3) return(NULL)  # too few rows to be meaningful
+        fit <- lm(reformulate(.x, response_var), data = dat, na.action = na.exclude)
+        glance(fit) %>% mutate(predictor = .x)
+      }) %>%
+      compact() %>%
+      list_rbind()
+    
+    if (nrow(metrics) == 0) {
+      tibble(group = character(), predictor = character(), adj.r.squared = double())
+    } else {
+      best <- metrics %>% slice_max(adj.r.squared, n = 1, with_ties = FALSE) %>%
+        transmute(group = gname, predictor, adj.r.squared)
+      best
+    }
+  })
+}
+
+remove_collinear_site <- function(df_site_model, response_var, threshold = cor_threshold) {
+  exclude_cols <- c(response_var, "Site", "Datetime")
+
+  # Numeric predictors only
+  pred_names <- setdiff(names(df_site_model), exclude_cols)
+  num_pred_names <- df_site_model %>%
+    dplyr::select(dplyr::any_of(pred_names)) %>%
+    dplyr::select(where(is.numeric)) %>%
+    names()
+
+  # Drop ultra-sparse predictors (<3 non-NA obs cannot form reliable correlations)
+  if (length(num_pred_names) == 0) {
+    return(list(clean_df = df_site_model, removed = character(0)))
+  }
+  nn <- vapply(df_site_model[num_pred_names], function(x) sum(!is.na(x)), integer(1))
+  sparse_drop <- names(nn[nn < 3])
+  keep <- setdiff(num_pred_names, sparse_drop)
+
+  if (length(keep) < 2) {
+    clean_df <- df_site_model %>% dplyr::select(-dplyr::any_of(sparse_drop))
+    return(list(clean_df = clean_df, removed = sparse_drop))
+  }
+
+  # Drop near-zero-variance predictors within site
+  nzv_idx  <- caret::nearZeroVar(df_site_model[keep], saveMetrics = FALSE)
+  nzv_drop <- if (length(nzv_idx)) keep[nzv_idx] else character(0)
+  keep2    <- setdiff(keep, nzv_drop)
+
+  if (length(keep2) < 2) {
+    clean_df <- df_site_model %>% dplyr::select(-dplyr::any_of(c(sparse_drop, nzv_drop)))
+    return(list(clean_df = clean_df, removed = c(sparse_drop, nzv_drop)))
+  }
+
+  # Correlation matrix with robust handling of NA/Inf
+  cor_matrix <- stats::cor(df_site_model[keep2], use = "pairwise.complete.obs")
+  diag(cor_matrix) <- 0
+  cor_matrix[!is.finite(cor_matrix)] <- 0  # allow pruning on finite pairs
+
+  to_drop <- caret::findCorrelation(cor_matrix, cutoff = threshold, names = TRUE, exact = TRUE)
+
+  removed  <- union(c(sparse_drop, nzv_drop), to_drop)
+  clean_df <- df_site_model %>% dplyr::select(-dplyr::any_of(removed))
+  list(clean_df = clean_df, removed = removed)
+}
+
+```
+
+*Building output datasets for each site and model*
+```{r}
+# Ensure Datetime exists; if it's missing, create a placeholder to keep interface consistent
+if (!"Datetime" %in% names(df)) df$Datetime <- NA
+
+sites <- sort(unique(df$Site))
+
+# Container outputs
+site_response_data <- list()   # final model-ready data frames per Site × response
+site_selection_log <- tibble() # tidy log of kept/removed per Site × response
+
+for (s in sites) {
+  df_site <- df %>% filter(Site == s)
+  site_response_data[[s]] <- list()
+  
+  for (resp in responses) {
+    # Skip if response not present
+    if (!resp %in% names(df_site)) next
+    
+    # Step 1: best predictor per group for this Site × response
+    best_tbl <- find_best_predictors_site(df_site, resp)
+    
+    # Defensive: coerce predictor names to character and filter NA/empty
+    if (nrow(best_tbl) == 0) {
+      chosen <- character(0)
+    } else {
+      chosen <- best_tbl %>%
+        mutate(predictor = as.character(predictor)) %>%
+        filter(!is.na(predictor), nzchar(predictor)) %>%
+        pull(predictor) %>%
+        unique()
+    }
+    
+    # Combine with static predictors, only those present
+    chosen_all <- c(chosen, static_predictors) %>%
+      unique() %>%
+      intersect(names(df_site))
+    
+    # Build site/response data frame (keep Site, Datetime, response)
+    base_cols <- c("Site", "Datetime", resp)
+    df_site_model <- df_site %>% select(any_of(c(base_cols, chosen_all)))
+    
+    # Step 2: remove collinear predictors within this site
+    col_res  <- remove_collinear_site(df_site_model, response_var = resp, threshold = cor_threshold)
+    final_df <- col_res$clean_df
+    removed  <- col_res$removed
+    
+    # Record outputs
+    site_response_data[[s]][[resp]] <- final_df
+    
+    # Compute kept from the final_df to reflect post-pruning set
+    kept <- setdiff(names(final_df), base_cols)
+    
+    site_selection_log <- bind_rows(
+      site_selection_log,
+      tibble(
+        Site               = s,
+        response           = resp,
+        kept_predictors    = list(kept),
+        removed_predictors = list(removed)
+      )
+    )
+  }
+}
+```
+
+*double checking correlations*
+```{r}
+check_corr <- function(df, resp, thr = 0.90) {
+  ex <- c("Site","Datetime", resp)
+  X  <- df %>% dplyr::select(-dplyr::any_of(ex)) %>% dplyr::select(where(is.numeric))
+  if (ncol(X) < 2) return(list(ok = TRUE, pairs = tibble()))
+  R <- stats::cor(X, use = "pairwise.complete.obs")
+  diag(R) <- NA
+  bad <- as.data.frame(as.table(R), stringsAsFactors = FALSE) %>%
+    dplyr::rename(var1 = Var1, var2 = Var2, r = Freq) %>%
+    dplyr::filter(!is.na(r), abs(r) > thr, var1 < var2)
+  list(ok = nrow(bad) == 0, pairs = tibble::as_tibble(bad))
+}
+
+# Scan all Site × response; list any problematic pairs
+bad_list <- list()
+for (s in names(site_response_data)) {
+  for (resp in names(site_response_data[[s]])) {
+    res <- check_corr(site_response_data[[s]][[resp]], resp, thr = 0.90)
+    if (!res$ok) {
+      bad_list[[length(bad_list)+1]] <- dplyr::bind_cols(
+        tibble::tibble(Site = s, response = resp), res$pairs
+      )
+    }
+  }
+}
+bad_pairs <- if (length(bad_list)) dplyr::bind_rows(bad_list) else tibble::tibble()
+bad_pairs  # should be empty after the fix
+
+
+```
+*saving output files*
+```{r}
+# Write per-site CSVs  
+output_dir <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/data/local_mod_data"
+
+walk(names(site_response_data), function(s) {
+   walk(names(site_response_data[[s]]), function(resp) {
+     fn <- file.path(output_dir, paste0(s, "_", resp, "_model_data.csv"))
+     write.csv(site_response_data[[s]][[resp]], fn, row.names = FALSE)
+   })
+ })
+```
+
+*Tables of selected predictors per Site × response*
+```{r}
+# Long table: one row per kept predictor (no list cols)
+selected_long <- site_selection_log %>%
+  mutate(response = dplyr::recode(response,
+                                  mean_WT = "Mean",
+                                  max_WT  = "Max",
+                                  range_WT= "Range")) %>%
+  # keep only what we need to unnest; drop other list cols
+  select(Site, response, kept_predictors) %>%
+  # drop rows where kept_predictors is NULL or length 0
+  filter(lengths(kept_predictors) > 0) %>%
+  # unnest character vectors into rows
+  tidyr::unnest(kept_predictors) %>%
+  rename(predictor = kept_predictors) %>%
+  filter(!is.na(predictor), nzchar(predictor)) %>%
+  arrange(Site, response, predictor)
+
+
+# Save to CSVs 
+out_dir <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/data/local_mod_data"
+
+# Coerce to plain data.frame to be extra safe for write.csv
+write.csv(as.data.frame(selected_long),   file.path(out_dir, "site_model_selected_predictors_long.csv"),   row.names = FALSE)
+
+```
+
