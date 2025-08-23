@@ -25,6 +25,7 @@ library(cowplot)
 library(scales)
 library(grid) 
 library(patchwork)
+library(ggh4x)
 
 set.seed(42)        # Reproducibility for folds/shuffles
 ```
@@ -986,6 +987,7 @@ plot_df <- plot_df %>%
   mutate(Importance = ifelse(abs(Importance) < vi_eps, 0, Importance))
 
 # 6) Plot — order by mean_imp; show same order across alg facets for a response
+
 p_vi_A <- ggplot(
   plot_df,
   aes(x = fct_reorder(var_key, mean_imp), y = Importance)
@@ -997,19 +999,21 @@ p_vi_A <- ggplot(
   geom_hline(yintercept = 0, linewidth = 0.4, linetype = "dashed") +
   coord_flip() +
   facet_grid(response ~ alg, scales = "free_y", space = "free_y") +
-  scale_x_discrete(labels = function(x) sub("^.*__", "", x)) +  
-  labs(
-    x = "Predictor",
-    y = "Increase in RMSE (°C)"
-  ) +
+  # labels for predictor names
+  scale_x_discrete(labels = function(x) sub("^.*__", "", x)) +
+  labs(x = "Predictor", y = "Increase in RMSE (°C)") +
   theme_minimal(base_size = 11) +
   theme(
     panel.grid.minor = element_blank(),
     strip.text = element_text(face = "bold"),
     plot.title = element_text(face = "bold"),
     axis.title.y = element_text(margin = margin(r = 10)),
-    panel.spacing = unit(0.5, "lines"),         # space between facet panels
-    plot.margin   = margin(10, 10, 10, 10)      # margin around whole plot (top, right, bottom, left)
+    panel.spacing = unit(0.5, "lines"),
+    plot.margin   = margin(10, 10, 10, 10)
+  ) +
+  # >>> Limit the horizontal axis to [0, 1] for LME facets only <<<
+  ggh4x::facetted_pos_scales(
+    y = list(alg == "LME" ~ scale_y_continuous(limits = c(0, 1)))
   )
 
 
