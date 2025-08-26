@@ -1,0 +1,1363 @@
+---
+title: "Wetland_local_models"
+author: "Michael Krochta"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+*General setup*
+```{r}
+library(tidyverse)
+library(lubridate)
+library(caret)
+library(ranger)
+library(xgboost)
+library(doParallel)
+
+# Paths 
+data_dir    <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/data/local_mod_data"
+results_dir <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/results/local_results"
+```
+
+*Data setup*
+```{r}
+# Helpers 
+# Robust date parser
+fix_dates <- function(df) {
+  if (!inherits(df$Datetime, "Date")) {
+    df$Datetime <- as.Date(
+      df$Datetime,
+      tryFormats = c("%Y-%m-%d","%m/%d/%Y","%m/%d/%y",
+                     "%Y-%m-%d %H:%M:%S","%m/%d/%Y %H:%M","%m/%d/%Y %H:%M:%S")
+    )
+  }
+  df
+}
+
+# Parse site + metric from filename like "Anvil_max_WT_model_data.csv"
+parse_site_metric <- function(path) {
+  f <- basename(path)
+  m <- regexec("^([A-Za-z0-9]+)_(max|mean|range)_WT_model_data\\.csv$", f)
+  parts <- regmatches(f, m)[[1]]
+  if (length(parts) != 3) stop("Unexpected filename pattern: ", f)
+  list(site = parts[2], metric_key = parts[3])  # metric_key in {max, mean, range}
+}
+
+# Response column map
+resp_cols <- list(max = "max_WT", mean = "mean_WT", range = "range_WT")
+
+# Remote-only exclusion (match your global setup)
+remote_exclude_exact <- c(
+  "WL_daily_mean","WL_daily_max","WL_daily_min","WL_daily_range",
+  "WL_mean_2day","WL_mean_3day","WL_mean_7day",
+  "WL_max_2day","WL_max_3day","WL_max_7day",
+  "WL_min_2day","WL_min_3day","WL_min_7day",
+  "GWT_mean","GWT_max","GWT_min","GWT_range",
+  "GWT_mean_2day","GWT_mean_3day","GWT_mean_7day",
+  "GWT_max_2day","GWT_max_3day","GWT_max_7day",
+  "GWT_min_2day","GWT_min_3day","GWT_min_7day",
+  "GWL_mean","GWL_max","GWL_min","GWL_range",
+  "GWL_mean_2day","GWL_mean_3day","GWL_mean_7day",
+  "GWL_max_2day","GWL_max_3day","GWL_max_7day",
+  "GWL_min_2day","GWL_min_3day","GWL_min_7day",
+  "Water_area_m2_3d"
+)
+remote_exclude_prefix <- c("WL_", "GWT_", "GWL_", "Water")  # keep as in your global pipeline
+
+get_predictors <- function(df, response_col, mode = c("all","remote")) {
+  mode <- match.arg(mode)
+  base <- setdiff(names(df), c(response_col, "Datetime", "Site"))  # never model on ID/time
+  if (mode == "all") return(base)
+  drop_prefixed <- unlist(lapply(remote_exclude_prefix, function(p) grep(paste0("^", p), base, value = TRUE)))
+  setdiff(base, unique(c(remote_exclude_exact, drop_prefixed)))
+}
+
+```
+
+
+*5-fold CV fxn*
+```{r}
+# Weekly-blocked CV with automatic k based on available weeks
+make_weekly_folds <- function(df, k = 5, date_col = "Datetime") {
+  df <- df %>% mutate(.week = lubridate::floor_date(.data[[date_col]], unit = "week", week_start = 1))
+  weeks <- sort(unique(df$.week))
+  k_eff <- min(k, length(weeks))
+  if (k_eff < 2) stop(sprintf("Not enough unique weeks (%d) for CV (need >= 2).", length(weeks)))
+  set.seed(42)
+  weeks <- sample(weeks)
+  folds <- split(weeks, cut(seq_along(weeks), breaks = k_eff, labels = FALSE))
+  index <- list(); indexOut <- list()
+  for (i in seq_along(folds)) {
+    val_weeks <- folds[[i]]
+    val_idx <- which(df$.week %in% val_weeks)
+    trn_idx <- setdiff(seq_len(nrow(df)), val_idx)
+    index[[paste0("Fold", i)]]    <- trn_idx
+    indexOut[[paste0("Fold", i)]] <- val_idx
+  }
+  list(index = index, indexOut = indexOut, k = length(folds))
+}
+```
+
+*Performance metrics*
+```{r}
+# Metrics 
+RMSE_ <- function(pred, obs) sqrt(mean((pred - obs)^2, na.rm = TRUE))
+MAE_  <- function(pred, obs) mean(abs(pred - obs), na.rm = TRUE)
+nse   <- function(obs, pred) 1 - sum((obs - pred)^2, na.rm = TRUE) /
+                              sum((obs - mean(obs, na.rm = TRUE))^2, na.rm = TRUE)
+
+compute_metrics <- function(pred_df, truth_col = "obs", pred_col = "pred", site_col = "Site") {
+  overall <- tibble(
+    RMSE = RMSE_(pred_df[[pred_col]], pred_df[[truth_col]]),
+    MAE  = MAE_ (pred_df[[pred_col]], pred_df[[truth_col]]),
+    R2   = caret::R2(pred_df[[pred_col]], pred_df[[truth_col]]),
+    NSE  = nse  (pred_df[[truth_col]], pred_df[[pred_col]])
+  )
+  by_site <- pred_df %>%
+    group_by(.data[[site_col]]) %>%
+    summarise(
+      RMSE = RMSE_(.data[[pred_col]], .data[[truth_col]]),
+      MAE  = MAE_ (.data[[pred_col]], .data[[truth_col]]),
+      R2   = caret::R2(.data[[pred_col]], .data[[truth_col]]),
+      NSE  = nse  (.data[[truth_col]], .data[[pred_col]]),
+      .groups = "drop"
+    ) %>% rename(Site = .data[[site_col]])
+  list(overall = overall, by_site = by_site)
+}
+```
+
+*Hyperparameters*
+```{r}
+# Hyperparameter grids 
+rf_grid_refined <- function(p) {
+  expand.grid(
+    mtry          = sort(unique(pmax(1, c(
+      floor(sqrt(p))-1, floor(sqrt(p)), floor(sqrt(p))+1,
+      floor(p/4), floor(p/3), floor(p/2), ceiling(2*p/3)
+    )))),
+    splitrule     = "variance",
+    min.node.size = c(1, 2, 3, 5, 7, 10, 15),
+    stringsAsFactors = FALSE
+  )
+}
+
+xgb_grid_refined <- expand.grid(
+  nrounds          = c(400, 800),
+  eta              = c(0.05, 0.1),
+  max_depth        = c(6, 9, 12),
+  min_child_weight = c(1, 4),
+  subsample        = c(0.8, 0.9),
+  colsample_bytree = c(0.8, 1.0),
+  gamma            = c(0, 0.1, 1.0)
+)
+```
+
+
+*Train models, prepping data*
+```{r}
+# Core trainer (unchanged logic from global; now used on single-site data)
+train_model <- function(data,
+                        response,
+                        predictors,
+                        model_type = c("xgb", "rfr"),
+                        k = 5,
+                        site_col = "Site",
+                        date_col = "Datetime",
+                        tune_grid = NULL) {
+
+  model_type <- match.arg(model_type)
+
+  # Keep only needed columns; drop rows with NA
+  df <- data %>% dplyr::select(all_of(c(site_col, date_col, response, predictors))) %>% na.omit()
+
+  # Build blocked folds (weekly) with auto k
+  folds <- make_weekly_folds(df, k = k, date_col = date_col)
+
+  # caret control
+  ctrl <- trainControl(
+    method          = "cv",
+    number          = folds$k,
+    index           = folds$index,
+    indexOut        = folds$indexOut,
+    verboseIter     = FALSE,
+    savePredictions = "final",
+    allowParallel   = TRUE
+  )
+
+  # Tuning grid
+  if (is.null(tune_grid)) {
+    tune_grid <- if (model_type == "rfr") rf_grid_refined(length(predictors)) else xgb_grid_refined
+  }
+
+  # Train
+  form <- as.formula(paste(response, "~ ."))
+  train_df <- df %>% dplyr::select(all_of(c(response, predictors)))
+
+  set.seed(2025)
+  if (model_type == "rfr") {
+    fit <- train(
+      form, data = train_df, method = "ranger",
+      trControl = ctrl, tuneGrid = tune_grid, metric = "RMSE",
+      importance = "permutation",
+      num.trees = 500,
+      num.threads = 1     # avoid nested parallel
+    )
+  } else {
+    fit <- train(
+      form, data = train_df, method = "xgbTree",
+      trControl = ctrl, tuneGrid = tune_grid, metric = "RMSE",
+      nthread = 1         # avoid nested parallel
+    )
+  }
+
+  # Align OOF predictions back to Site/Date
+  if (!"rowIndex" %in% names(fit$pred)) stop("caret did not return 'rowIndex' in fit$pred.")
+  oof <- fit$pred %>%
+    mutate(
+      Site = df[[site_col]][rowIndex],
+      Date = df[[date_col]][rowIndex]
+    ) %>%
+    transmute(Site, Date, obs = obs, pred = pred)
+
+  # Metrics
+  mets <- compute_metrics(oof, truth_col = "obs", pred_col = "pred", site_col = "Site")
+
+  # Var importance
+  vimp <- varImp(fit)$importance %>%
+    tibble::rownames_to_column("Variable") %>%
+    arrange(desc(Overall))
+
+  list(
+    response        = response,
+    model_type      = model_type,
+    predictors      = predictors,
+    best_params     = fit$bestTune,
+    cv_results      = fit$results,
+    metrics_overall = mets$overall,
+    metrics_by_site = mets$by_site,
+    var_importance  = vimp,
+    oof_predictions = oof,
+    fit_object      = fit
+  )
+}
+
+# Build datasets for a single local file (Set A = all, Set B = remote-only)
+prep_dataset_local <- function(df, response_key, site_name, mode = c("all","remote")) {
+  mode <- match.arg(mode)
+  response_col <- resp_cols[[response_key]]
+  if (!response_col %in% names(df)) stop("Response column not found: ", response_col)
+  df2 <- df %>% mutate(Site = site_name)
+  preds <- get_predictors(df2, response_col, mode = mode)
+  list(data = df2, response = response_col, predictors = preds)
+}
+
+```
+
+*Model run fxn*
+```{r}
+# Run all local files 
+run_all_local <- function(data_dir, k = 5) {
+  files <- list.files(data_dir, pattern = "_(max|mean|range)_WT_model_data\\.csv$", full.names = TRUE)
+  if (length(files) == 0) stop("No local files found in: ", data_dir)
+
+  results <- list()
+
+  # parallel outer loop
+  cl <- makeCluster(parallel::detectCores() - 1)
+  registerDoParallel(cl)
+
+  on.exit({
+    stopCluster(cl)
+    registerDoSEQ()
+  }, add = TRUE)
+
+  for (fp in files) {
+    info <- parse_site_metric(fp)
+    site <- info$site
+    resp_key <- info$metric_key
+    response_col <- resp_cols[[resp_key]]
+
+    message(sprintf(">>> %s | %s_WT", site, resp_key))
+
+    df <- read.csv(fp, stringsAsFactors = FALSE) %>% fix_dates()
+
+    # --- Set A: All predictors (single-site file; no site exclusion)
+    A <- prep_dataset_local(df, resp_key, site, mode = "all")
+    # XGB
+    results[[paste(site, resp_key, "A_xgb", sep = "_")]] <- train_model(
+      data = A$data, response = A$response, predictors = A$predictors,
+      model_type = "xgb", k = k
+    )
+    # RFR
+    results[[paste(site, resp_key, "A_rfr", sep = "_")]] <- train_model(
+      data = A$data, response = A$response, predictors = A$predictors,
+      model_type = "rfr", k = k
+    )
+
+    # --- Set B: Remote-only
+    B <- prep_dataset_local(df, resp_key, site, mode = "remote")
+    if (length(B$predictors) >= 1) {  # skip if remote-only leaves nothing
+      results[[paste(site, resp_key, "B_xgb", sep = "_")]] <- train_model(
+        data = B$data, response = B$response, predictors = B$predictors,
+        model_type = "xgb", k = k
+      )
+      results[[paste(site, resp_key, "B_rfr", sep = "_")]] <- train_model(
+        data = B$data, response = B$response, predictors = B$predictors,
+        model_type = "rfr", k = k
+      )
+    } else {
+      warning(sprintf("No predictors left for remote-only at %s %s; skipping Set B.", site, resp_key))
+    }
+  }
+
+  results
+}
+
+```
+
+*Run models, get outputs*
+```{r}
+# Execute 
+local_results_refined <- run_all_local(data_dir, k = 5)
+
+# Save full object
+saveRDS(local_results_refined, file.path(results_dir, "local_models_refined.rds"))
+
+# Summarize overall metrics
+summary_tbl <- purrr::imap_dfr(local_results_refined, function(res, key) {
+  parts <- strsplit(key, "_")[[1]]
+  tibble(
+    Site   = parts[1],
+    Metric = parts[2],           # max / mean / range
+    Set    = parts[3],           # A / B
+    Model  = toupper(parts[4]),  # xgb / rfr
+    RMSE   = res$metrics_overall$RMSE,
+    MAE    = res$metrics_overall$MAE,
+    R2     = res$metrics_overall$R2,
+    NSE    = res$metrics_overall$NSE,
+    n_pred = length(res$predictors)
+  )
+}) %>% arrange(Site, Metric, Set, Model)
+
+readr::write_csv(summary_tbl, file.path(results_dir, "local_models_refined_summary.csv"))
+
+message("Done. Results:\n  - RDS: ", file.path(results_dir, "local_models_refined.rds"),
+        "\n  - CSV: ", file.path(results_dir, "local_models_refined_summary.csv"))
+```
+
+*Evaluating results*
+```{r}
+
+# paths
+results_dir <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/results/local_results"
+summary_path <- file.path(results_dir, "local_models_refined_summary.csv")
+
+# 1) load your existing summary (overall OOF metrics per run)
+summary_tbl <- readr::read_csv(summary_path, show_col_types = FALSE)
+# Expecting columns like: Site, Metric, Set, Model, RMSE, MAE, R2, NSE, n_pred
+
+# helper to parse key -> fields
+parse_key <- function(key){
+  parts <- strsplit(key, "_")[[1]]
+  tibble(Site = parts[1], Metric = parts[2], Set = parts[3], Model = toupper(parts[4]))
+}
+
+# 2) build small add-on tables from local_results_refined
+# n_oof per run
+n_oof_tbl <- purrr::imap_dfr(local_results_refined, function(res, key){
+  parse_key(key) %>% mutate(n_oof = nrow(res$oof_predictions))
+})
+
+# resample diagnostics
+resample_diag <- purrr::imap_dfr(local_results_refined, function(res, key){
+  rs <- res$fit_object$resample
+  parse_key(key) %>%
+    mutate(
+      n_resamples = nrow(rs),
+      rmse_mean   = mean(rs$RMSE, na.rm = TRUE),
+      rmse_sd     = sd(rs$RMSE,   na.rm = TRUE),
+      na_RMSE     = sum(is.na(rs$RMSE)),
+      na_R2       = sum(is.na(rs$Rsquared))
+    )
+})
+
+# best-tuned hyperparameters (wide)
+best_params_wide <- purrr::imap_dfr(local_results_refined, function(res, key){
+  bp <- as_tibble(res$best_params); if (ncol(bp) == 0) bp <- tibble()
+  bind_cols(parse_key(key), bp)
+})
+
+# edge-of-grid flag
+edge_flag <- purrr::imap_dfr(local_results_refined, function(res, key){
+  bt <- res$best_params; grid <- res$cv_results
+  at_edge_any <- FALSE
+  if (!is.null(bt) && !is.null(grid) && nrow(grid) > 0) {
+    ps <- intersect(names(bt), names(grid))
+    at_edge_any <- any(purrr::map_lgl(ps, function(p){
+      col <- grid[[p]]; val <- bt[[p]]
+      if (is.factor(col)) col <- as.character(col)
+      if (is.numeric(col)) {
+        suppressWarnings(as.numeric(val)) %in% range(col, na.rm = TRUE)
+      } else {
+        u <- sort(unique(as.character(col)))
+        length(u) > 1 && as.character(val) %in% c(u[1], u[length(u)])
+      }
+    }))
+  }
+  parse_key(key) %>% mutate(edge_hit = at_edge_any)
+})
+
+# 3) join add-ons onto your existing summary (no duplication)
+local_models_master <- summary_tbl %>%
+  left_join(n_oof_tbl,      by = c("Site","Metric","Set","Model")) %>%
+  left_join(resample_diag,  by = c("Site","Metric","Set","Model")) %>%
+  left_join(best_params_wide,by = c("Site","Metric","Set","Model")) %>%
+  left_join(edge_flag,      by = c("Site","Metric","Set","Model")) %>%
+  mutate(retune = (edge_hit %in% TRUE) | (na_RMSE > 0)) %>%
+  arrange(Site, Metric, Set, Model)
+
+# 4) write the consolidated table
+out_path <- file.path(results_dir, "local_models_master.csv")
+readr::write_csv(local_models_master, out_path)
+
+message("Wrote: ", out_path)
+
+```
+
+*Evaluating hyperparameters and k-folds and re-running individual models where needed*
+```{r}
+
+data_dir    <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/data/local_mod_data"
+results_dir <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/results/local_results_pass2"
+master_path <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/results/local_results/local_models_master.csv"
+compare_out <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/results/local_results/local_models_master_pass2_compare.csv"
+
+dir.create(results_dir, recursive = TRUE, showWarnings = FALSE)
+
+# Load master & normalize / ensure columns 
+master <- readr::read_csv(master_path, show_col_types = FALSE) %>%
+  mutate(Model = toupper(Model))
+
+if (!"edge_hit" %in% names(master)) master$edge_hit <- FALSE
+if (!"na_RMSE"  %in% names(master)) master$na_RMSE  <- 0
+
+if (!"cv_instability" %in% names(master)) {
+  if (all(c("rmse_sd","rmse_mean") %in% names(master))) {
+    master <- master %>%
+      mutate(cv_instability = ifelse(is.finite(rmse_mean) & rmse_mean > 0,
+                                     (rmse_sd / rmse_mean) > 0.35, FALSE))
+  } else {
+    master$cv_instability <- FALSE
+  }
+}
+
+master <- master %>%
+  mutate(
+    edge_hit       = replace_na(edge_hit, FALSE),
+    cv_instability = replace_na(cv_instability, FALSE),
+    na_RMSE        = replace_na(na_RMSE, 0)
+  )
+
+# Edge-at-top checks (what *really* warrants expansion) 
+edge_high_xgb <- function(row) {
+  isTRUE(row$nrounds == 800) || isTRUE(row$max_depth == 12)
+}
+edge_high_rfr <- function(row) {
+  mns <- dplyr::coalesce(row$`min.node.size`, row$min.node.size)
+  high_mns  <- isTRUE(mns == 15)
+  high_mtry <- !is.na(row$mtry) && !is.na(row$n_pred) && row$mtry >= ceiling(0.75 * row$n_pred)
+  high_mns || high_mtry
+}
+
+master <- master %>%
+  rowwise() %>%
+  mutate(edge_high_core = if (Model == "XGB") edge_high_xgb(cur_data()) else edge_high_rfr(cur_data())) %>%
+  ungroup()
+
+# Choose pass-2 targets (keep ALL runs; only refit flagged ones) 
+targets <- master %>%
+  filter(NSE < 0 | cv_instability | na_RMSE > 0 | edge_high_core) %>%
+  arrange(Site, Metric, Set, Model)
+
+# Preview (optional)
+targets %>%
+  select(Site, Metric, Set, Model, RMSE, NSE, edge_high_core, cv_instability, na_RMSE)
+message("Targets to refit: ", nrow(targets))
+
+# Micro-grids: tweak only edges; keep other params fixed 
+expand_grid_xgb_min <- function(row){
+  nr <- ifelse(is.na(row$nrounds), 800L, as.integer(row$nrounds))
+  md <- ifelse(is.na(row$max_depth), 9L,  as.integer(row$max_depth))
+  mc <- ifelse(is.na(row$min_child_weight), 1L, as.integer(row$min_child_weight))
+  et <- ifelse(is.na(row$eta), 0.05, as.numeric(row$eta))
+  ss <- ifelse(is.na(row$subsample), 0.8, as.numeric(row$subsample))
+  cs <- ifelse(is.na(row$colsample_bytree), 0.8, as.numeric(row$colsample_bytree))
+  ga <- ifelse(is.na(row$gamma), 0.0, as.numeric(row$gamma))
+
+  edge  <- isTRUE(row$edge_high_core)
+  shaky <- isTRUE(row$cv_instability) || (is.numeric(row$na_RMSE) && row$na_RMSE > 0) || (is.numeric(row$NSE) && row$NSE < 0)
+
+  nr_vals <- if (edge && nr >= 800)            unique(c(nr, nr+200, nr+400))
+        else if (shaky)                         unique(c(max(200L, nr-200L), nr, nr+200L))
+        else                                    nr
+
+  md_vals <- if (edge && md >= 12)             unique(c(md, md+2))
+        else if (shaky)                         unique(c(max(2L, md-2L), md, md+2L))
+        else                                    md
+
+  mc_vals <- if (mc %in% c(1,4))               unique(c(mc, max(1, mc-1), mc+1)) else mc
+  ga_vals <- if (ga %in% c(0,1.0))             unique(c(ga, ifelse(ga==0, 0.05, 2.0))) else ga
+
+  expand.grid(
+    nrounds          = nr_vals,
+    max_depth        = md_vals,
+    min_child_weight = mc_vals,
+    gamma            = ga_vals,
+    eta              = et,
+    subsample        = ss,
+    colsample_bytree = cs,
+    KEEP.OUT.ATTRS = FALSE, stringsAsFactors = FALSE
+  )
+}
+
+expand_grid_rfr_min <- function(row){
+  p  <- ifelse(is.na(row$n_pred), NA_integer_, as.integer(row$n_pred))
+  mt <- ifelse(is.na(row$mtry), ifelse(is.na(p), 3L, max(1L, floor(sqrt(p)))), as.integer(row$mtry))
+  mns <- dplyr::coalesce(row$`min.node.size`, row$min.node.size)
+  mns <- ifelse(is.na(mns), 5L, as.integer(mns))
+
+  edge  <- isTRUE(row$edge_high_core)
+  shaky <- isTRUE(row$cv_instability) || (is.numeric(row$na_RMSE) && row$na_RMSE > 0) || (is.numeric(row$NSE) && row$NSE < 0)
+
+  mtry_vals <-
+    if (!is.na(p) && edge && mt >= ceiling(0.75*p)) sort(unique(pmin(p, c(mt, ceiling(0.85*p), ceiling(0.95*p))))) else
+    if (!is.na(p) && shaky)                         sort(unique(c(max(1L, mt-1L), mt, min(p, mt+1L)))) else
+                                                     mt
+
+  mns_vals <- if (mns %in% c(1,15)) unique(c(mns, ifelse(mns==1, 2L, 20L))) else mns
+
+  expand.grid(
+    mtry          = mtry_vals,
+    splitrule     = "variance",
+    min.node.size = mns_vals,
+    KEEP.OUT.ATTRS = FALSE, stringsAsFactors = FALSE
+  )
+}
+
+# Runner: fits ONLY the flagged runs; supports dry-run & resume 
+run_pass2_targets <- function(
+  targets,
+  data_dir    = data_dir,
+  results_dir = results_dir,
+  execute     = FALSE,
+  resume      = TRUE
+){
+  dir.create(results_dir, recursive = TRUE, showWarnings = FALSE)
+
+  for (i in seq_len(nrow(targets))) {
+    row   <- targets[i,]
+    site  <- row$Site
+    metric<- row$Metric         # "max"/"mean"/"range"
+    setAB <- row$Set            # "A"/"B"
+    model <- tolower(row$Model) # "xgb"/"rfr"
+
+    in_fp   <- file.path(data_dir, sprintf("%s_%s_WT_model_data.csv", site, metric))
+    out_rds <- file.path(results_dir, sprintf("%s_%s_%s_%s_pass2.rds", site, metric, setAB, model))
+
+    if (resume && file.exists(out_rds)) { message("SKIP (exists): ", basename(out_rds)); next }
+
+    tg <- if (model == "xgb") expand_grid_xgb_min(row) else expand_grid_rfr_min(row)
+    # Use k=4 only if we previously saw fold issues
+    k2 <- if (isTRUE(row$cv_instability) || (is.numeric(row$na_RMSE) && row$na_RMSE > 0)) 4L else 5L
+
+    message(sprintf("%s | %s_WT | Set %s | %s | k=%d | grid=%d",
+                    site, metric, setAB, toupper(model), k2, nrow(tg)))
+
+    if (!execute) next  # DRY RUN only
+
+    # Load + prep (uses your existing helpers)
+    df <- read.csv(in_fp, stringsAsFactors = FALSE)
+    if (!inherits(df$Datetime, "Date")) {
+      df$Datetime <- as.Date(df$Datetime,
+        tryFormats = c("%Y-%m-%d","%m/%d/%Y","%m/%d/%y",
+                       "%Y-%m-%d %H:%M:%S","%m/%d/%Y %H:%M","%m/%d/%Y %H:%M:%S"))
+    }
+    D <- prep_dataset_local(df, metric, site, mode = ifelse(setAB=="A","all","remote"))
+    if (!length(D$predictors)) { warning("No predictors after filtering: ", site, " ", metric, " Set ", setAB); next }
+
+    res2 <- train_model(
+      data = D$data, response = D$response, predictors = D$predictors,
+      model_type = model, k = k2, tune_grid = tg
+    )
+    saveRDS(res2, out_rds)
+  }
+  invisible(NULL)
+}
+
+# 
+# 1) Dry-run (prints what would be rerun; does NOT refit)
+# passing paths explicitly to avoid the default-arg quirk
+run_pass2_targets(
+  targets,
+  data_dir    = "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/data/local_mod_data",
+  results_dir = "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/results/local_results_pass2",
+  execute     = TRUE,   # <-- actually fit now
+  resume      = TRUE    # <-- safe to rerun; skips any finished jobs
+)
+
+
+# 2) actually run just those flagged ones
+# run_pass2_targets(targets, execute = TRUE)
+
+
+# PASS-2 COMPARISON (SAFE)
+
+collect_pass2 <- function(dir) {
+  files <- list.files(dir, pattern = "_pass2\\.rds$", full.names = TRUE)
+  if (!length(files)) return(tibble())  # safe empty
+  purrr::map_dfr(files, function(fp){
+    fn <- basename(fp)
+    m <- regexec("^([A-Za-z0-9]+)_(max|mean|range)_(A|B)_(xgb|rfr)_pass2\\.rds$", fn)
+    parts <- regmatches(fn, m)[[1]]
+    if (length(parts) != 5) return(NULL)
+    Site   <- parts[2]; Metric <- parts[3]; Set <- parts[4]; Model <- toupper(parts[5])
+    res <- readRDS(fp)
+    tibble(
+      Site, Metric, Set, Model,
+      RMSE_p2 = res$metrics_overall$RMSE,
+      MAE_p2  = res$metrics_overall$MAE,
+      R2_p2   = res$metrics_overall$R2,
+      NSE_p2  = res$metrics_overall$NSE,
+      n_resamples_p2 = nrow(res$fit_object$resample),
+      grid_rows_p2   = nrow(res$cv_results),
+      pass2_file     = fp
+    )
+  })
+}
+
+pass2 <- collect_pass2(results_dir)
+
+if (nrow(pass2) == 0) {
+  message("No pass-2 files found in: ", results_dir,
+          "\nRun `run_pass2_targets(targets, execute = TRUE)` first, then re-run this compare.")
+} else {
+  base <- master %>% 
+    select(Site, Metric, Set, Model, RMSE, MAE, R2, NSE, n_resamples)
+
+  compare <- pass2 %>%
+    left_join(base, by = c("Site","Metric","Set","Model")) %>%
+    mutate(
+      dRMSE = RMSE_p2 - RMSE,   # negative = improvement
+      dMAE  = MAE_p2  - MAE,
+      dR2   = R2_p2   - R2,
+      dNSE  = NSE_p2  - NSE
+    ) %>%
+    arrange(Site, Metric, Set, Model)
+
+  readr::write_csv(compare, compare_out)
+  message("Wrote comparison CSV: ", compare_out)
+}
+
+```
+
+
+*Final local models results table*
+```{r}
+MASTER_CSV <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/results/local_results/local_models_master.csv"
+PASS2_DIR  <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/results/local_results_pass2"
+FINAL_OUT  <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/results/local_results/local_models_final.csv"
+
+#  Load original master & normalize 
+orig <- readr::read_csv(MASTER_CSV, show_col_types = FALSE) %>%
+  mutate(Model = toupper(Model))
+
+# normalize possible naming differences for RFR:
+if ("min_node_size" %in% names(orig) && !"min.node.size" %in% names(orig)) {
+  orig <- orig %>% rename(`min.node.size` = min_node_size)
+}
+
+# keep only the columns we care about + set k (originals used k=5)
+keep_cols <- c("Site","Metric","Set","Model","RMSE","MAE","R2","NSE",
+               # XGB params (may be NA for RFR rows)
+               "nrounds","eta","max_depth","min_child_weight","subsample","colsample_bytree","gamma",
+               # RFR params (may be NA for XGB rows)
+               "mtry","min.node.size")
+present_cols <- intersect(keep_cols, names(orig))
+
+orig_slim <- orig %>%
+  select(any_of(present_cols)) %>%
+  mutate(k = 5L, source = "orig")
+
+# Collect pass-2 results from RDS 
+collect_pass2 <- function(dir) {
+  files <- list.files(dir, pattern = "_pass2\\.rds$", full.names = TRUE)
+  if (!length(files)) return(tibble())  # safe empty
+
+  purrr::map_dfr(files, function(fp){
+    fn <- basename(fp)
+    m <- regexec("^([A-Za-z0-9]+)_(max|mean|range)_(A|B)_(xgb|rfr)_pass2\\.rds$", fn)
+    parts <- regmatches(fn, m)[[1]]
+    if (length(parts) != 5) return(NULL)
+
+    Site   <- parts[2]
+    Metric <- parts[3]
+    Set    <- parts[4]
+    Model  <- toupper(parts[5])
+
+    res <- readRDS(fp)
+
+    # metrics
+    mets <- res$metrics_overall %>%
+      transmute(RMSE = RMSE, MAE = MAE, R2 = R2, NSE = NSE)
+
+    # best params (caret bestTune)
+    bp <- tibble::as_tibble(res$best_params)
+
+    # ensure all expected param cols exist (fill with NA if missing)
+    xgb_cols <- c("nrounds","eta","max_depth","min_child_weight","subsample","colsample_bytree","gamma")
+    rfr_cols <- c("mtry","min.node.size")
+    for (cc in c(xgb_cols, rfr_cols)) {
+      if (!cc %in% names(bp)) bp[[cc]] <- NA
+    }
+
+    # k via Resample column (Fold1, Fold2, ...)
+    k_used <- tryCatch({
+      if (!is.null(res$fit_object$resample$Resample)) {
+        length(unique(res$fit_object$resample$Resample))
+      } else NA_integer_
+    }, error = function(e) NA_integer_)
+
+    tibble(
+      Site   = Site,
+      Metric = Metric,
+      Set    = Set,
+      Model  = Model,
+      RMSE   = mets$RMSE[1],
+      MAE    = mets$MAE[1],
+      R2     = mets$R2[1],
+      NSE    = mets$NSE[1],
+      # params:
+      nrounds = bp$nrounds[1],
+      eta = bp$eta[1],
+      max_depth = bp$max_depth[1],
+      min_child_weight = bp$min_child_weight[1],
+      subsample = bp$subsample[1],
+      colsample_bytree = bp$colsample_bytree[1],
+      gamma = bp$gamma[1],
+      mtry = bp$mtry[1],
+      `min.node.size` = bp$`min.node.size`[1],
+      k = k_used,
+      source = "pass2"
+    )
+  }) %>% arrange(Site, Metric, Set, Model)
+}
+
+p2 <- collect_pass2(PASS2_DIR)
+
+# Compose FINAL table: pass-2 overrides orig where present 
+if (nrow(p2) == 0) {
+  message("No pass-2 files found; final table = originals only.")
+  final <- orig_slim
+} else {
+  keys <- c("Site","Metric","Set","Model")
+
+  # originals that DO NOT have a pass-2 counterpart
+  orig_only <- orig_slim %>%
+    anti_join(p2 %>% select(all_of(keys)), by = keys)
+
+  # union with pass-2 rows
+  # (both have the same column set except possibly missing some param cols)
+  all_cols <- union(names(orig_only), names(p2))
+  orig_only <- orig_only %>% mutate(across(setdiff(all_cols, names(.)), ~NA))
+  p2        <- p2        %>% mutate(across(setdiff(all_cols, names(.)), ~NA))
+
+  final <- bind_rows(orig_only[, all_cols], p2[, all_cols]) %>%
+    arrange(Site, Metric, Set, Model)
+}
+
+# Save final table 
+readr::write_csv(final, FINAL_OUT)
+message("Wrote final models table: ", FINAL_OUT)
+
+# Optional: quick peek at how many came from pass-2
+final %>% count(source)
+
+```
+
+
+**Local GLS Models**
+*Data setup*
+```{r}
+library(nlme)
+library(car)         
+library(dplyr)
+library(tidyr)
+library(purrr)
+library(lubridate)
+library(tibble)
+
+# Remote-only exclusion 
+remote_exclude_exact <- c(
+  "WL_daily_mean","WL_daily_max","WL_daily_min","WL_daily_range",
+  "WL_mean_2day","WL_mean_3day","WL_mean_7day",
+  "WL_max_2day","WL_max_3day","WL_max_7day",
+  "WL_min_2day","WL_min_3day","WL_min_7day",
+  "GWT_mean","GWT_max","GWT_min","GWT_range",
+  "GWT_mean_2day","GWT_mean_3day","GWT_mean_7day",
+  "GWT_max_2day","GWT_max_3day","GWT_max_7day",
+  "GWT_min_2day","GWT_min_3day","GWT_min_7day",
+  "GWL_mean","GWL_max","GWL_min","GWL_range",
+  "GWL_mean_2day","GWL_mean_3day","GWL_mean_7day",
+  "GWL_max_2day","GWL_max_3day","GWL_max_7day",
+  "GWL_min_2day","GWL_min_3day","GWL_min_7day", "Water_area_m2_3d"
+)
+remote_exclude_prefix <- c("WL_", "GWT_", "GWL_", "Water")
+
+# Response column resolver (local files)
+resolve_response_col <- function(df, metric = c("max","mean","range")) {
+  metric <- match.arg(metric)
+  guess <- switch(metric,
+                  max   = "max_WT",
+                  mean  = "mean_WT",
+                  range = "range_WT")
+  if (guess %in% names(df)) return(guess)
+  # fallback: first column name containing pattern
+  pat <- paste0("^", metric, "(_)?WT")
+  hit <- grep(pat, names(df), value = TRUE, ignore.case = TRUE)
+  if (length(hit)) return(hit[1])
+  stop("Could not find response column for metric='", metric, "'.")
+}
+
+# Predictors for a given df + mode (all vs remote-only) 
+get_predictors_local <- function(df, response_col, mode = c("all","remote")) {
+  mode <- match.arg(mode)
+  base <- setdiff(names(df), c(response_col, "Site", "Datetime"))
+  if (mode == "all") return(base)
+  # remote-only: drop exacts and prefixed
+  drop_prefixed <- unlist(lapply(remote_exclude_prefix, function(p) grep(paste0("^", p), base, value = TRUE)))
+  setdiff(base, unique(c(remote_exclude_exact, drop_prefixed)))
+}
+
+# Date fixer 
+fix_dates <- function(df, date_col = "Datetime") {
+  if (!inherits(df[[date_col]], "Date")) {
+    df[[date_col]] <- as.Date(df[[date_col]],
+                              tryFormats = c("%Y-%m-%d","%m/%d/%Y","%m/%d/%y",
+                                             "%Y-%m-%d %H:%M:%S","%m/%d/%Y %H:%M","%m/%d/%Y %H:%M:%S"))
+  }
+  df
+}
+```
+
+*VIF functions*
+```{r}
+# VIF pruning
+vif_prune <- function(train_df, response, preds, thresh = 5) {
+  keep <- preds
+  dropped <- character(0)
+
+  # Drop constant columns up front
+  nzv <- keep[sapply(keep, function(v) sd(train_df[[v]], na.rm = TRUE) == 0)]
+  if (length(nzv)) {
+    keep <- setdiff(keep, nzv)
+    dropped <- c(dropped, nzv)
+  }
+
+  repeat {
+    if (length(keep) == 0L) break
+
+    fm <- as.formula(paste(response, "~", paste(keep, collapse = "+")))
+    fit_lm <- try(lm(fm, data = train_df), silent = TRUE)
+    if (inherits(fit_lm, "try-error")) break
+
+    # 1) Handle aliasing first: drop any predictors with NA coefficients
+    aliased <- names(coef(fit_lm))[is.na(coef(fit_lm))]
+    aliased <- intersect(aliased, keep)
+    if (length(aliased)) {
+      keep    <- setdiff(keep, aliased)
+      dropped <- c(dropped, aliased)
+      next  # re-fit with reduced set
+    }
+
+    # 2) Now compute VIF on the estimable set
+    v <- try(suppressWarnings(car::vif(fit_lm)), silent = TRUE)
+    if (inherits(v, "try-error")) {
+      # If something unexpected still happens, bail out of pruning
+      break
+    }
+    if (is.matrix(v)) v <- diag(v)
+
+    vmax <- max(v, na.rm = TRUE)
+    if (!is.finite(vmax) || is.nan(vmax) || vmax <= thresh) break
+
+    drop_this <- names(v)[which.max(v)]
+    keep    <- setdiff(keep, drop_this)
+    dropped <- c(dropped, drop_this)
+  }
+
+  list(keep = keep, dropped = unique(dropped))
+}
+
+# alias-tolerant VIF (logging helper) 
+safe_vif_long <- function(df, response, preds) {
+  preds <- unique(preds)
+  preds <- preds[!is.na(preds) & preds %in% names(df)]
+  if (length(preds) == 0L) {
+    return(tibble::tibble(predictor = character(0), vif = numeric(0)))
+  }
+
+  fm  <- as.formula(paste(response, "~", paste(preds, collapse = "+")))
+  fit <- try(stats::lm(fm, data = df), silent = TRUE)
+  if (inherits(fit, "try-error")) {
+    return(tibble::tibble(predictor = preds, vif = NA_real_))
+  }
+
+  # drop aliased (non-estimable) predictors
+  aliased   <- names(coef(fit))[is.na(coef(fit))]
+  aliased   <- intersect(aliased, preds)
+  estimable <- setdiff(preds, aliased)
+
+  vif_vec <- setNames(rep(NA_real_, length(preds)), preds)
+
+  if (length(estimable) >= 1) {
+    if (length(estimable) == 1) {
+      vif_est <- setNames(1, estimable)              # VIF = 1 for single predictor
+    } else {
+      fm_est  <- as.formula(paste(response, "~", paste(estimable, collapse = "+")))
+      fit_est <- stats::lm(fm_est, data = df)
+      v <- suppressWarnings(car::vif(fit_est))
+      if (is.matrix(v)) v <- diag(v)
+      vif_est <- setNames(as.numeric(v), names(v))
+    }
+    vif_vec[names(vif_est)] <- unname(vif_est)
+  }
+
+  tibble::tibble(predictor = names(vif_vec), vif = as.numeric(vif_vec))
+}
+
+```
+
+*More model setup: AR(1) structure, fixed effects, etc.*
+```{r}
+# AR(1) correlation structure for gls (single-site) 
+make_cor_ar1_local <- function(date_col = "Datetime") {
+  corAR1(form = as.formula(paste0("~ as.numeric(", date_col, ")")))
+}
+
+# Tidy fixed effects for gls 
+tidy_gls_fixed <- function(fit) {
+  tt <- summary(fit)$tTable
+  tibble(
+    term      = rownames(tt),
+    estimate  = as.numeric(tt[, "Value"]),
+    std.error = as.numeric(tt[, "Std.Error"]),
+    statistic = as.numeric(tt[, "t-value"]),
+    p.value   = as.numeric(tt[, "p-value"])
+  )
+}
+
+# Safe gls fit 
+fit_gls_safe <- function(fixed_formula, data, date_col = "Datetime") {
+  nlme::gls(
+    model       = fixed_formula,
+    correlation = corAR1(form = as.formula(paste0("~ as.numeric(", date_col, ")"))),
+    data        = data,
+    method      = "REML",
+    na.action   = na.omit,
+    control     = nlme::glsControl(
+      msMaxIter  = 200,   # optimizer iterations
+      msTol      = 1e-7,  # optimizer tolerance (like step tolerance)
+      tolerance  = 1e-6,  # convergence tolerance
+      msVerbose  = FALSE
+    )
+  )
+}
+```
+
+*GLS training fxn*
+```{r}
+# Core trainer (per-site, per-metric, per-set) 
+train_gls_local <- function(data,
+                            response,
+                            predictors,
+                            k = 5,
+                            site_col = "Site",
+                            date_col = "Datetime",
+                            vif_thresh = 5) {
+
+  base_df <- data %>%
+    dplyr::select(all_of(c(site_col, date_col, response, predictors))) %>%
+    tidyr::drop_na()
+
+  # weekly blocked folds (you already have this helper defined globally)
+  folds <- make_weekly_folds(base_df, k = k, date_col = date_col)
+
+  oof_list <- vector("list", k)
+  fold_kept_preds <- vector("list", k)
+  fold_dropped_preds <- vector("list", k)
+
+  for (i in seq_len(k)) {
+    val_idx <- folds$indexOut[[i]]
+    trn_idx <- folds$index[[i]]
+
+    train_df <- base_df[trn_idx, , drop = FALSE]
+    val_df   <- base_df[val_idx, , drop = FALSE]
+
+    vp <- vif_prune(train_df, response, predictors, thresh = vif_thresh)
+    kept <- vp$keep
+
+    fixed_formula <- if (length(kept) > 0) {
+      reformulate(termlabels = kept, response = response)
+    } else {
+      as.formula(paste(response, "~ 1"))
+    }
+
+    fit <- fit_gls_safe(fixed_formula, train_df, date_col = date_col)
+
+    val_x <- val_df %>% dplyr::select(all_of(c(site_col, date_col, response, kept))) %>% tidyr::drop_na()
+    preds <- as.numeric(predict(fit, newdata = val_x))
+
+    oof_list[[i]] <- tibble(
+      Site = val_x[[site_col]],
+      Date = val_x[[date_col]],
+      obs  = val_x[[response]],
+      pred = preds
+    )
+    fold_kept_preds[[i]]    <- kept
+    fold_dropped_preds[[i]] <- vp$dropped
+  }
+
+  oof <- bind_rows(oof_list)
+  mets <- compute_metrics(oof, truth_col = "obs", pred_col = "pred", site_col = "Site")
+
+  # Fit final on full data with VIF on full set
+  vp_full <- vif_prune(base_df, response, predictors, vif_thresh)
+  kept_full    <- if (length(vp_full$keep) > 0) vp_full$keep else character(0)
+  dropped_full <- vp_full$dropped
+
+  fixed_full <- if (length(kept_full) > 0) {
+    reformulate(termlabels = kept_full, response = response)
+  } else {
+    as.formula(paste(response, "~ 1"))
+  }
+  fit_full <- fit_gls_safe(fixed_full, base_df, date_col = date_col)
+
+  coefs <- tidy_gls_fixed(fit_full)
+  phi <- tryCatch(as.numeric(coef(fit_full$modelStruct$corStruct, unconstrained = FALSE)),
+                  error = function(e) NA_real_)
+
+    list(
+    response          = response,
+    model_type        = "gls_ar1",
+    predictors_init   = predictors,
+    vif_thresh        = vif_thresh,
+    fold_kept         = fold_kept_preds,
+    fold_dropped      = fold_dropped_preds,
+    kept_full         = kept_full,
+    dropped_full      = dropped_full,
+    metrics_overall   = mets$overall,
+    metrics_by_site   = mets$by_site,
+    oof_predictions   = oof,
+    fit_object        = fit_full,
+    fixed_effects     = coefs,
+    ar1_phi           = phi,
+    full_data         = base_df   
+  )
+
+}
+
+# Runner over local files (per-site, both sets A/B)
+run_all_lme_local <- function(data_dir,
+                              k = 5,
+                              vif_thresh = 5) {
+  files <- list.files(data_dir, pattern = "_(max|mean|range)_WT_model_data\\.csv$", full.names = TRUE)
+  results <- list()
+
+  for (fp in files) {
+    bn <- basename(fp)
+    m <- regexec("^([A-Za-z0-9._-]+)_(max|mean|range)_WT_model_data\\.csv$", bn)
+    parts <- regmatches(bn, m)[[1]]
+    if (length(parts) != 3) next
+    site   <- parts[2]
+    metric <- parts[3]
+
+    message(">>> ", site, " | ", metric, "_WT")
+
+    df <- read.csv(fp, stringsAsFactors = FALSE) %>% fix_dates()
+
+    # Response + predictors for Set A/B
+    response_col <- resolve_response_col(df, metric)
+    # Set A: all predictors
+    preds_A <- get_predictors_local(df, response_col, mode = "all")
+    # Set B: remote-only
+    preds_B <- get_predictors_local(df, response_col, mode = "remote")
+
+    # Fit A
+    if (length(preds_A) > 0) {
+      keyA <- paste(site, metric, "A_gls", sep = "_")
+      results[[keyA]] <- train_gls_local(
+        data = df, response = response_col, predictors = preds_A,
+        k = k, site_col = "Site", date_col = "Datetime", vif_thresh = vif_thresh
+      )
+    } else {
+      warning("No predictors for ", site, " ", metric, " Set A; skipping.")
+    }
+
+    # Fit B
+    if (length(preds_B) > 0) {
+      keyB <- paste(site, metric, "B_gls", sep = "_")
+      results[[keyB]] <- train_gls_local(
+        data = df, response = response_col, predictors = preds_B,
+        k = k, site_col = "Site", date_col = "Datetime", vif_thresh = vif_thresh
+      )
+    } else {
+      warning("No predictors for ", site, " ", metric, " Set B; skipping.")
+    }
+  }
+
+  results
+}
+
+```
+
+*Running GLS model and saving outputs*
+```{r}
+# Paths
+data_dir <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/data/local_mod_data"
+out_dir  <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/results/local_lme_results"
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+# Run
+local_lme_results <- run_all_lme_local(data_dir, k = 5, vif_thresh = 5)
+
+# Save full object
+saveRDS(local_lme_results, file.path(out_dir, "local_lme_results.rds"))
+
+
+# ONE consolidated metrics table (per Site × Metric × Set)
+metrics_local_gls <- purrr::imap_dfr(local_lme_results, function(res, nm){
+  parts <- strsplit(nm, "_", fixed = TRUE)[[1]]
+  Site <- parts[1]; Metric <- parts[2]; Set <- parts[3]; alg <- "gls_ar1"
+
+  tibble::tibble(
+    Site, Metric, Set, alg,
+    RMSE = res$metrics_overall$RMSE,
+    MAE  = res$metrics_overall$MAE,
+    R2   = res$metrics_overall$R2,
+    NSE  = res$metrics_overall$NSE,
+    k            = length(res$fold_kept),        # number of folds used
+    n_oof        = nrow(res$oof_predictions),    # out-of-fold predictions count
+    n_pred_init  = length(res$predictors_init),  # candidates before VIF
+    n_pred_kept  = length(res$kept_full),        # kept after VIF pruning
+    ar1_phi      = res$ar1_phi                   # AR(1) phi
+  )
+})
+
+readr::write_csv(metrics_local_gls, file.path(out_dir, "gls_metrics_local.csv"))
+
+
+# Fixed effects & AR(1) phi 
+fixed_effects_local_lme <- purrr::imap_dfr(local_lme_results, ~{
+  .x$fixed_effects %>% dplyr::mutate(model_id = .y, ar1_phi = .x$ar1_phi)
+}, .id = NULL) %>%
+  tidyr::separate(model_id, into = c("Site","Metric","Set","alg"), sep = "_") %>%
+  dplyr::mutate(alg = "gls_ar1") %>%
+  dplyr::relocate(Site, Metric, Set, alg, ar1_phi)
+
+readr::write_csv(fixed_effects_local_lme, file.path(out_dir, "gls_fixed_effects_local.csv"))
+
+
+# VIF log (before/after/dropped) — uses safe_vif_long() and res$full_data
+vif_log_local_lme <- purrr::imap_dfr(local_lme_results, function(res, model_id) {
+  parts <- strsplit(model_id, "_", fixed = TRUE)[[1]]
+  Site <- parts[1]; Metric <- parts[2]; Set <- parts[3]
+
+  vb <- safe_vif_long(res$full_data, res$response, res$predictors_init) %>%
+        dplyr::mutate(stage = "before")
+  va <- safe_vif_long(res$full_data, res$response, res$kept_full) %>%
+        dplyr::mutate(stage = "after")
+  vd <- vb %>%
+        dplyr::filter(predictor %in% res$dropped_full) %>%
+        dplyr::mutate(stage = "dropped")
+
+  dplyr::bind_rows(vb, va, vd) %>%
+    dplyr::mutate(Site = Site, Metric = Metric, Set = Set, alg = "gls_ar1",
+                  dropped = stage == "dropped") %>%
+    dplyr::select(Site, Metric, Set, alg, stage, predictor, vif, dropped)
+}, .id = NULL)
+
+readr::write_csv(vif_log_local_lme, file.path(out_dir, "gls_vif_log_long_local.csv"))
+
+message("Done. Results at: ", out_dir, 
+        "\n  - gls_metrics_local.csv",
+        "\n  - gls_fixed_effects_local.csv",
+        "\n  - gls_vif_log_long_local.csv")
+```
+
+*Permutation variable importances*
+```{r}
+# Permutation VI for ALL FINAL LOCAL MODELS
+# (XGB, RFR, GLS/AR1) -> one consolidated CSV
+library(vip)
+
+set.seed(42)
+options(vip.smaller_is_better = TRUE)
+
+# Paths
+DATA_DIR  <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/data/local_mod_data"
+FINAL_CSV <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/results/local_results/local_models_final.csv"
+ORIG_RDS  <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/results/local_results/local_models_refined.rds"
+PASS2_DIR <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/results/local_results_pass2"
+GLS_RDS   <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/results/local_lme_results/local_lme_results.rds"
+OUT_DIR   <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/results/local_results"
+dir.create(OUT_DIR, recursive = TRUE, showWarnings = FALSE)
+
+# Helpers 
+rmse_loss <- function(truth, estimate) sqrt(mean((truth - estimate)^2, na.rm = TRUE))
+pred_wrap_caret <- function(object, newdata) predict(object, newdata = newdata)
+pred_wrap_gls   <- function(object, newdata) predict(object, newdata = newdata)
+
+# Final model selection (ML rows only)
+final_ml <- readr::read_csv(FINAL_CSV, show_col_types = FALSE) %>%
+  mutate(Model = toupper(Model)) %>%
+  filter(Model %in% c("XGB","RFR"))
+
+# Original ML model list
+orig_list <- if (file.exists(ORIG_RDS)) readRDS(ORIG_RDS) else NULL
+
+# Load a final ML model object (orig vs pass2) for a given key
+load_final_ml_model <- function(site, metric, setAB, model, source) {
+  alg_tag <- tolower(model)  # "xgb" | "rfr"
+  source  <- tolower(source)
+  if (source == "pass2") {
+    fp <- file.path(PASS2_DIR, sprintf("%s_%s_%s_%s_pass2.rds", site, metric, setAB, alg_tag))
+    if (!file.exists(fp)) stop("Pass-2 file not found: ", fp)
+    readRDS(fp)
+  } else {
+    if (is.null(orig_list)) stop("Original models list RDS not found: ", ORIG_RDS)
+    key <- paste(site, metric, setAB, alg_tag, sep = "_")
+    if (!key %in% names(orig_list)) stop("Original model not in list: ", key)
+    orig_list[[key]]
+  }
+}
+
+# Build X/y from the on-disk local CSV, aligned to a given predictor set
+build_train_xy <- function(site, metric, predictors) {
+  in_fp <- file.path(DATA_DIR, sprintf("%s_%s_WT_model_data.csv", site, metric))
+  stopifnot(file.exists(in_fp))
+  df <- read.csv(in_fp, stringsAsFactors = FALSE) %>% fix_dates()
+  response_col <- resolve_response_col(df, metric)
+  # Keep only response + predictors; drop rows with NA
+  combo <- df %>% dplyr::select(dplyr::all_of(c(response_col, predictors))) %>% tidyr::drop_na()
+  list(
+    y = combo[[response_col]],
+    X = combo %>% dplyr::select(dplyr::all_of(predictors)),
+    response = response_col
+  )
+}
+
+NSIMS <- 20
+
+# Permutation VI for FINAL ML models (XGB/RFR)
+vi_ml_perm <- purrr::pmap_dfr(
+  final_ml %>% dplyr::select(Site, Metric, Set, Model, source),
+  function(Site, Metric, Set, Model, source) {
+    # Load the chosen (orig or pass2) model
+    res <- load_final_ml_model(Site, Metric, Set, Model, source)
+
+    # Predictors actually used in that fit
+    preds <- res$predictors
+    if (is.null(preds) || !length(preds)) {
+      warning("No predictors for ", paste(Site, Metric, Set, Model, source, sep=" / "), "; skipping.")
+      return(tibble())
+    }
+
+    tr <- build_train_xy(Site, Metric, preds)
+
+    vi <- vip::vi_permute(
+      object            = res$fit_object,   # caret::train
+      train             = tr$X,
+      target            = tr$y,
+      metric            = rmse_loss,
+      pred_wrapper      = pred_wrap_caret,
+      nsim              = NSIMS,
+      keep              = TRUE,
+      parallel          = FALSE,
+      smaller_is_better = TRUE
+    )
+
+    tibble(
+      Site = Site, Metric = Metric, Set = Set,
+      Model = toupper(Model), source = tolower(source),
+      Variable   = vi$Variable,
+      Importance = vi$Importance,
+      Stderr     = vi$StDev,
+      nsim       = NSIMS,
+      type       = "permutation"
+    )
+  }
+)
+
+
+# Permutation VI for GLS (AR1) local models
+vi_gls_perm <- {
+  if (file.exists(GLS_RDS)) {
+    gls_list <- readRDS(GLS_RDS)
+    purrr::imap_dfr(gls_list, function(res, key){
+      parts <- strsplit(key, "_", fixed = TRUE)[[1]]
+      Site <- parts[1]; Metric <- parts[2]; Set <- parts[3]
+      kept <- res$kept_full
+      if (is.null(kept) || !length(kept)) return(tibble())
+
+      # Use the stored full_data to avoid any mismatch
+      df <- res$full_data
+      response <- res$response
+
+      combo <- df %>% dplyr::select(dplyr::all_of(c(response, kept))) %>% tidyr::drop_na()
+      y <- combo[[response]]
+      X <- combo %>% dplyr::select(dplyr::all_of(kept))
+
+      vi <- vip::vi_permute(
+        object            = res$fit_object,   # nlme::gls
+        train             = X,
+        target            = y,
+        metric            = rmse_loss,
+        pred_wrapper      = pred_wrap_gls,
+        nsim              = NSIMS,
+        keep              = TRUE,
+        parallel          = FALSE,
+        smaller_is_better = TRUE
+      )
+
+      tibble(
+        Site = Site, Metric = Metric, Set = Set,
+        Model = "GLS", source = "gls",
+        Variable   = vi$Variable,
+        Importance = vi$Importance,
+        Stderr     = vi$StDev,
+        nsim       = NSIMS,
+        type       = "permutation"
+      )
+    })
+  } else {
+    tibble()
+  }
+}
+
+
+# Consolidate (ALL models) and write ONE file
+varimp_perm_local_ALL_final <- bind_rows(vi_ml_perm, vi_gls_perm) %>%
+  arrange(Site, Metric, Set, Model, desc(Importance))
+
+OUT_FILE <- file.path(OUT_DIR, "varimp_perm_local_ALL_final.csv")
+readr::write_csv(varimp_perm_local_ALL_final, OUT_FILE)
+
+message("Wrote: ", OUT_FILE,
+        "\nRows: ", nrow(varimp_perm_local_ALL_final))
+
+```
+
