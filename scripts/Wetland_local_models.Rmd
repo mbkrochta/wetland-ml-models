@@ -1358,6 +1358,347 @@ readr::write_csv(varimp_perm_local_ALL_final, OUT_FILE)
 
 message("Wrote: ", OUT_FILE,
         "\nRows: ", nrow(varimp_perm_local_ALL_final))
+```
+
+*Variable importance plots*
+```{r}
+library(forcats)
+library(stringr)
+library(ggh4x)
+
+vi_file    <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/results/local_results/varimp_perm_local_ALL_final.csv"  # <-- set to your file
+output_dir <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/figures"
+
+# Load & prep
+vi_raw <- readr::read_csv(vi_file, show_col_types = FALSE)
+
+vi <- vi_raw %>%
+  filter(Set == "A") %>%
+  mutate(
+    alg = dplyr::case_when(
+      Model == "GLS" ~ "GLS",
+      Model == "RFR" ~ "RFR",
+      Model == "XGB" ~ "XGB",
+      TRUE ~ Model
+    ),
+    response = dplyr::case_when(
+      Metric == "max"   ~ "Max",
+      Metric == "mean"  ~ "Mean",
+      Metric == "range" ~ "Range",
+      TRUE ~ Metric
+    ),
+    alg = factor(alg, levels = c("GLS","RFR","XGB")),
+    response = factor(response, levels = c("Max","Mean","Range"))
+  ) %>%
+  select(Site, response, alg, Variable, Importance, Stderr)
+
+# SITE-SPECIFIC mini-global plot 
+make_site_plot <- function(site_name, top_k = 12, clamp_LME = FALSE) {
+
+  # 1) choose top-k variables *within this site x response* (mean across algs)
+  site_top <- vi %>%
+    filter(Site == site_name) %>%
+    group_by(response, Variable) %>%
+    summarise(mean_imp = mean(Importance, na.rm = TRUE), .groups = "drop") %>%
+    filter(!is.na(mean_imp)) %>%
+    group_by(response) %>%
+    slice_max(order_by = mean_imp, n = top_k, with_ties = FALSE) %>%
+    arrange(response, desc(mean_imp)) %>%
+    mutate(var_key = paste0(response, "__", Variable)) %>%
+    ungroup()
+
+  # 2) build plotting frame for this site using its own top-k order
+  plot_df <- vi %>%
+    filter(Site == site_name) %>%
+    mutate(
+      var_key = paste0(response, "__", Variable),
+      Importance = dplyr::coalesce(Importance, 0)  # show 0 if a model didn't produce VI
+    ) %>%
+    inner_join(site_top, by = c("response","Variable","var_key"))
+
+  p <- ggplot(plot_df, aes(x = forcats::fct_reorder(var_key, mean_imp), y = Importance)) +
+    geom_col(width = 0.75) +
+    geom_errorbar(aes(ymin = pmax(0, Importance - Stderr),
+                      ymax = Importance + Stderr),
+                  width = 0.2, alpha = 0.5) +
+    geom_hline(yintercept = 0, linewidth = 0.4, linetype = "dashed") +
+    coord_flip() +
+    facet_grid(response ~ alg, scales = "free_y", space = "free_y") +
+    scale_x_discrete(labels = function(x) sub("^.*__", "", x)) +
+    labs(
+      title = paste0("Local variable importance — ", site_name),
+      x = "Predictor",
+      y = "Increase in RMSE (°C)"
+    ) +
+    theme_minimal(base_size = 11) +
+    theme(
+      panel.grid.minor = element_blank(),
+      strip.text = element_text(face = "bold"),
+      plot.title = element_text(face = "bold"),
+      axis.title.y = element_text(margin = margin(r = 10)),
+      panel.spacing = unit(0.5, "lines"),
+      plot.margin   = margin(10, 10, 10, 10)
+    )
+
+  if (clamp_LME) {
+    p <- p + ggh4x::facetted_pos_scales(
+      y = list(alg == "LME" ~ scale_y_continuous(limits = c(0, 1)))
+    )
+  }
+  p
+}
+
+# make & save all sites
+sites <- vi %>% distinct(Site) %>% arrange(Site) %>% pull(Site)
+
+purrr::walk(sites, function(s) {
+  p <- make_site_plot(s, top_k = 12, clamp_LME = FALSE)
+  ggsave(
+    filename = file.path("C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/figures/varimp_local",
+                         paste0("varimp_local_", gsub("\\s+", "_", s), ".png")),
+    plot = p, width = 8.5, height = 9, units = "in", dpi = 300, bg = "white"
+  )
+})
 
 ```
+
+*Heatmaps of mean variable importances across models*
+```{r}
+library(tidyr)
+library(viridis)   # optional; comment out if you prefer the grayscale scale below
+
+# how many variables to keep per response in the heatmap
+top_k_heatmap <- 12
+
+# choose the statistic for the cell value:
+use_stat <- "mean"   # "mean" or "max" across algorithms
+
+cell_summarise <- function(x) {
+  if (use_stat == "max") max(x, na.rm = TRUE) else mean(x, na.rm = TRUE)
+}
+
+# 1) pick top-k variables per response by *overall* importance across sites+models
+top_rows <- vi %>%
+  group_by(response, Variable) %>%
+  summarise(overall = mean(Importance, na.rm = TRUE), .groups = "drop") %>%
+  group_by(response) %>%
+  slice_max(order_by = overall, n = top_k_heatmap, with_ties = FALSE) %>%
+  arrange(response, desc(overall)) %>%
+  ungroup()
+
+# 2) build a long table summarizing to one value per (response, Variable, Site)
+heat_long <- vi %>%
+  inner_join(top_rows %>% select(response, Variable), by = c("response","Variable")) %>%
+  group_by(response, Variable, Site) %>%
+  summarise(val = cell_summarise(Importance), .groups = "drop")
+
+# 3) helper to plot one response at a time
+plot_heatmap_response <- function(resp, palette = c("viridis","gray")[1]) {
+  df <- heat_long %>%
+    filter(response == resp)
+
+  # order rows by the same overall ranking used to pick top-k
+  row_order <- top_rows %>%
+    filter(response == resp) %>%
+    arrange(desc(overall)) %>%
+    pull(Variable)
+
+  # order columns (sites) alphabetically; change if you prefer another order
+  site_order <- df %>% distinct(Site) %>% arrange(Site) %>% pull(Site)
+
+  ggplot(
+    df %>% mutate(
+      Variable = factor(Variable, levels = rev(row_order)),  # rev so top appears at top
+      Site     = factor(Site, levels = site_order)
+    ),
+    aes(x = Site, y = Variable, fill = val)
+  ) +
+    geom_tile(color = "white", linewidth = 0.3) +
+    # choose palette
+    {
+      if (palette == "viridis")
+        scale_fill_viridis(name = "Mean importance", option = "C", na.value = "white")
+      else
+        scale_fill_gradient(name = "Mean importance", low = "grey95", high = "grey10", na.value = "white")
+    } +
+    labs(
+      title = paste0("Local variable importance (", resp, ")"),
+      x = NULL, y = NULL
+    ) +
+    theme_minimal(base_size = 11) +
+    theme(
+      panel.grid = element_blank(),
+      axis.text.x = element_text(angle = 30, hjust = 1, vjust = 1),
+      plot.title  = element_text(face = "bold"),
+      legend.title = element_text(size = 10),
+      legend.key.height = unit(0.5, "cm"),
+      legend.key.width  = unit(0.4, "cm"),
+      plot.margin = margin(10, 10, 10, 10)
+    )
+}
+
+# 4) make & save three heatmaps
+outdir_hm <- file.path("C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/figures", "varimp_local_heatmaps")
+if (!dir.exists(outdir_hm)) dir.create(outdir_hm, recursive = TRUE)
+
+responses <- c("Max","Mean","Range")
+purrr::walk(responses, function(rsp) {
+  p_hm <- plot_heatmap_response(rsp, palette = "viridis")  # or "gray" to match your bar charts
+  ggsave(
+    filename = file.path(outdir_hm, paste0("varimp_local_heatmap_", rsp, ".png")),
+    plot = p_hm, width = 8.5, height = 7, units = "in", dpi = 300, bg = "white"
+  )
+})
+
+```
+
+*Local obs vs pred plots*
+```{r}
+# Labels
+resp_lab <- c(max = "Max WT", mean = "Mean WT", range = "Range WT")
+alg_lab  <- c(lme = "GLS",    rfr  = "RFR",     xgb   = "XGB")
+
+# 1) Collect Set A OOF predictions from your local objects
+collect_local_oof_setA <- function(local_results_refined, local_lme_results) {
+  # RFR/XGB
+  df_ml <- purrr::imap_dfr(local_results_refined, function(x, nm){
+    parts <- strsplit(nm, "_", fixed = TRUE)[[1]]  # <Site>_<metric>_<Set>_<model>
+    if (length(parts) != 4L || parts[3] != "A") return(NULL)
+    tibble(
+      Site     = parts[1],
+      response = parts[2],       # max / mean / range
+      set      = parts[3],       # A
+      alg      = parts[4],       # rfr / xgb
+      Date     = x$oof_predictions$Date,
+      obs      = x$oof_predictions$obs,
+      pred     = x$oof_predictions$pred
+    )
+  })
+
+  # GLS (normalize to alg="lme")
+  df_gls <- purrr::imap_dfr(local_lme_results, function(x, nm){
+    parts <- strsplit(nm, "_", fixed = TRUE)[[1]]  # <Site>_<metric>_<Set>_gls
+    if (length(parts) != 4L || parts[3] != "A") return(NULL)
+    tibble(
+      Site     = parts[1],
+      response = parts[2],
+      set      = parts[3],
+      alg      = "lme",
+      Date     = x$oof_predictions$Date,
+      obs      = x$oof_predictions$obs,
+      pred     = x$oof_predictions$pred
+    )
+  })
+
+  bind_rows(df_ml, df_gls) %>%
+    mutate(
+      response = factor(response, levels = c("max","mean","range"), labels = resp_lab),
+      alg      = factor(alg,      levels = c("lme","rfr","xgb"),    labels = alg_lab)
+    ) %>%
+    arrange(response, alg, Site, Date)
+}
+
+# Build OOF df (requires local_results_refined + local_lme_results in env)
+oof_local_A <- collect_local_oof_setA(local_results_refined, local_lme_results)
+
+# 2) Helpers for scales/metrics
+int_breaks <- function(lims, target = 6L) {
+  lo <- floor(lims[1]); hi <- ceiling(lims[2])
+  span <- max(1, hi - lo)
+  step <- max(1L, round(span / target))
+  seq(lo, hi, by = step)
+}
+
+limits_by_response <- function(df) {
+  df %>%
+    group_by(response) %>%
+    summarise(
+      lo = floor(min(c(obs, pred), na.rm = TRUE)),
+      hi = ceiling(max(c(obs, pred), na.rm = TRUE)),
+      .groups = "drop"
+    )
+}
+
+# 3) Main plotting function: one figure per response (rows=models, cols=sites)
+make_response_grid <- function(dat, resp_label, site_order = NULL, show_metrics = TRUE) {
+  dd <- dat %>% filter(response == resp_label)
+
+  # order sites (alphabetical by default)
+  if (is.null(site_order)) {
+    site_order <- dd %>% distinct(Site) %>% arrange(Site) %>% pull(Site)
+  }
+
+  # common limits/breaks for this response
+  lim_tbl <- limits_by_response(dd)
+  lim_row <- lim_tbl %>% filter(response == resp_label)
+  lims <- c(lim_row$lo, lim_row$hi)
+  brk  <- int_breaks(lims, target = 6L)
+
+  # per-panel metrics (Site x alg for this response)
+  mets <- dd %>%
+    group_by(Site, alg) %>%
+    tidyr::nest() %>%
+    mutate(
+      slope = purrr::map_dbl(data, ~ coef(lm(pred ~ obs, data = .x))[2]),
+      rmse  = purrr::map_dbl(data, ~ sqrt(mean((.x$pred - .x$obs)^2, na.rm = TRUE)))
+    ) %>%
+    select(-data)
+
+  # annotation position (top-left of each panel)
+  ann_y <- lims[2] - (diff(lims) * 0.05)
+  ann_x <- lims[1] + (diff(lims) * 0.03)
+
+  ggplot(
+    dd %>% mutate(Site = factor(Site, levels = site_order)),
+    aes(obs, pred)
+  ) +
+    geom_point(alpha = 0.65, size = 1.6, stroke = 0.25) +
+    geom_abline(slope = 1, intercept = 0, linetype = "dashed", linewidth = 0.7) +
+    geom_smooth(method = "lm", se = FALSE, linewidth = 0.9) +
+    { if (show_metrics)
+        geom_text(
+          data = mets %>% mutate(Site = factor(Site, levels = site_order)),
+          aes(x = ann_x, y = ann_y,
+              label = sprintf("slope=%.2f\nRMSE=%.2f", slope, rmse)),
+          hjust = 0, vjust = 1, size = 3, inherit.aes = FALSE
+        )
+    } +
+    facet_grid(rows = vars(alg), cols = vars(Site)) +
+    coord_equal(ratio = 1) +
+    scale_x_continuous(limits = lims, breaks = brk, minor_breaks = NULL,
+                       labels = scales::label_number(accuracy = 1)) +
+    scale_y_continuous(limits = lims, breaks = brk, minor_breaks = NULL,
+                       labels = scales::label_number(accuracy = 1)) +
+    labs(
+      title = paste0("Observed vs Predicted — ", resp_label),
+      x = "Observed (°C)",
+      y = "Predicted (°C)"
+    ) +
+    theme_minimal(base_size = 12) +
+    theme(
+      panel.grid.minor = element_blank(),
+      panel.grid.major = element_line(linewidth = 0.35),
+      strip.text = element_text(face = "bold"),
+      legend.position = "none",
+      panel.spacing = unit(6, "pt"),
+      plot.margin = unit(c(5, 6, 5, 6), "pt")
+    )
+}
+
+# 4) Make & save three per-response grids
+out_dir <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/figures/obs_pred_local"
+if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE)
+
+responses <- c("Max WT","Mean WT","Range WT")
+purrr::walk(responses, function(rsp) {
+  p <- make_response_grid(oof_local_A, rsp, show_metrics = TRUE)
+  ggsave(
+    filename = file.path(out_dir, paste0("obs_vs_pred_local_", gsub("\\s+","_", rsp), ".png")),
+    plot = p, width = 12, height = 8.5, units = "in", dpi = 300, bg = "white"
+  )
+})
+
+```
+
+
 
