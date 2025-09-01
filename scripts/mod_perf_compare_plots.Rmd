@@ -1,0 +1,189 @@
+---
+title: "Model perf compare plots"
+author: "Michael Krochta"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+```
+
+*global boxplots (maybe don't need)*
+```{r}
+library(tidyverse)
+
+# Paths
+perf_dir <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/results/model_performance"
+fig_dir  <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/figures"
+
+# Load
+df_ml  <- readr::read_csv(file.path(perf_dir, "metrics_by_site.csv"), show_col_types = FALSE)
+df_lme <- readr::read_csv(file.path(perf_dir, "lme_metrics_by_site.csv"), show_col_types = FALSE)
+
+# Harmonize algorithm labels
+df_ml  <- df_ml  %>% mutate(alg = toupper(alg))   # RFR / XGB
+df_lme <- df_lme %>% mutate(alg = "LME")          # label as GLS for plots
+
+# Combine on shared columns
+common_cols <- intersect(names(df_ml), names(df_lme))
+df_all <- bind_rows(df_ml[common_cols], df_lme[common_cols])
+
+# Helper to plot/save one set
+plot_save_set <- function(set_letter) {
+  df_set <- df_all %>% filter(set == set_letter)
+
+  p <- ggplot(df_set, aes(x = alg, y = RMSE, fill = alg)) +
+    geom_boxplot(outlier.shape = NA, alpha = 0.8, width = 0.6) +
+    facet_wrap(~response, scales = "free_y") +
+    theme_minimal(base_size = 13) +
+    theme(legend.position = "none") +
+    labs(x = "Algorithm", y = "RMSE (°C)")  # no title
+
+  # Filenames: full (A) vs partial (B)
+  name <- ifelse(set_letter == "A", "full", "partial")
+  outfile <- file.path(fig_dir, paste0("global_model_RMSE_boxplot_", name, ".png"))
+
+  ggsave(outfile, plot = p, width = 10, height = 6, units = "in", dpi = 300, bg = "white")
+  message("Saved: ", outfile)
+}
+
+# Make both
+plot_save_set("A")
+plot_save_set("B")
+
+
+```
+
+
+```{r}
+library(tidyverse)
+
+# --- Paths ---
+perf_global_dir <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/results/model_performance"
+perf_local_dir  <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/results/local_results"
+fig_dir         <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/figures"
+
+# ---------- GLOBAL (overall) ----------
+g_ml  <- readr::read_csv(file.path(perf_global_dir, "metrics_overall.csv"),      show_col_types = FALSE)
+g_gls <- readr::read_csv(file.path(perf_global_dir, "lme_metrics_overall.csv"), show_col_types = FALSE)
+
+glob_all <- bind_rows(
+  g_ml  %>% transmute(response, set, alg = toupper(alg), RMSE),
+  g_gls %>% transmute(response, set, alg = "GLS",        RMSE)
+) %>%
+  mutate(
+    response = dplyr::case_when(
+      response == "max"   ~ "Max WT",
+      response == "mean"  ~ "Mean WT",
+      response == "range" ~ "Range WT",
+      TRUE ~ as.character(response)
+    ),
+    alg = dplyr::case_when(
+      tolower(alg) %in% c("gls","lme") ~ "GLS",
+      tolower(alg) == "rfr"            ~ "RFR",
+      tolower(alg) == "xgb"            ~ "XGB",
+      TRUE ~ toupper(alg)
+    ),
+    alg = factor(alg, levels = c("GLS","RFR","XGB")),
+    set = toupper(set)
+  )
+
+# ---------- LOCAL (by site, Set A/B) ----------
+loc_ml  <- readr::read_csv(file.path(perf_local_dir, "local_models_final.csv"), show_col_types = FALSE)
+loc_gls <- readr::read_csv(file.path(perf_local_dir, "gls_metrics_local.csv"),  show_col_types = FALSE)
+
+loc_all <- bind_rows(
+  loc_ml  %>% transmute(Site, response = Metric, set = Set, alg = toupper(Model), RMSE),
+  loc_gls %>% transmute(Site, response = Metric, set = Set, alg = "GLS",         RMSE)
+) %>%
+  mutate(
+    response = dplyr::case_when(
+      response == "max"   ~ "Max WT",
+      response == "mean"  ~ "Mean WT",
+      response == "range" ~ "Range WT",
+      TRUE ~ as.character(response)
+    ),
+    alg = factor(alg, levels = c("GLS","RFR","XGB")),
+    set = toupper(set)
+  )
+
+# ---------- Plot function (one set at a time) ----------
+plot_local_vs_global <- function(set_letter = "A") {
+  dd_local <- loc_all %>% filter(set == set_letter)
+  dd_glob  <- glob_all %>% filter(set == set_letter)
+
+  # manual site palette for stability (optional)
+  site_pal <- c(
+    Anvil   = "#E67E80", Butte   = "#8AADF4", Cooper = "#A6D189",
+    Crater  = "#C6A0F6", Hideaway= "#7DC4E4", Pint   = "#E5C890", Sam = "#F4B8E4"
+  )
+  # keep only sites present
+  site_levels <- sort(unique(dd_local$Site))
+  site_pal <- site_pal[names(site_pal) %in% site_levels]
+
+  p <- ggplot() +
+    # Local, by site (colored lines + solid points)
+    geom_line(
+      data = dd_local,
+      aes(x = alg, y = RMSE, group = Site, color = Site),
+      linewidth = 0.9, alpha = 0.95
+    ) +
+    geom_point(
+      data = dd_local,
+      aes(x = alg, y = RMSE, color = Site),
+      size = 2.4, alpha = 1
+    ) +
+    # Global overall (black dashed line + hollow point, with its own legend key)
+    # Option A: group by response (since you facet by response)
+geom_line(
+  data = dd_glob,
+  aes(x = alg, y = RMSE, group = response, linetype = "Global (overall)"),
+  color = "black", linewidth = 0.9
+) +
+
+     
+    geom_point(
+      data = dd_glob,
+      aes(x = alg, y = RMSE, shape = "Global (overall)"),
+      color = "black", fill = "white", stroke = 1.1, size = 2.8
+    ) +
+    facet_wrap(~ response, scales = "free_y") +
+    scale_color_manual(values = site_pal, name = "Site") +
+    scale_linetype_manual(values = c("Global (overall)" = "dashed")) +
+    scale_shape_manual(values = c("Global (overall)" = 21)) +
+    guides(
+      # We only want ONE small legend key for the global reference:
+      linetype = "none",
+      shape = guide_legend(
+        title = NULL,
+        override.aes = list(linetype = "dashed", color = "black", fill = "white", size = 3)
+      ),
+      color = guide_legend(title = "Site")
+    ) +
+    labs(x = "Algorithm", y = "RMSE (°C)") +
+    theme_minimal(base_size = 12) +
+    theme(
+      panel.grid.minor = element_blank(),
+      legend.position  = "bottom",
+      legend.box       = "vertical",
+      strip.text       = element_text(face = "bold")
+    )
+
+  outfile <- file.path(
+    fig_dir,
+    paste0("local_vs_global_RMSE_Set", set_letter, ".png")
+  )
+  ggsave(outfile, p, width = 11, height = 6.8, dpi = 300, bg = "white")
+  message("Saved: ", outfile)
+  p
+}
+
+# Make both figures
+plot_local_vs_global("A")
+plot_local_vs_global("B")
+
+
+```
+
