@@ -1,0 +1,181 @@
+---
+title: "wetland_corr_plots"
+author: "Michael Krochta"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(stringr)
+
+# Paths 
+data_dir_global <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/data"
+data_dir_local  <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/data/local_mod_data"
+fig_dir         <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/figures"
+```
+
+```{r}
+# Helper: infer response label from filename ("Max WT", "Mean WT", "Range WT")
+infer_response_from_name <- function(x) {
+  x_low <- tolower(x)
+  if (str_detect(x_low, "max"))   return("Max WT")
+  if (str_detect(x_low, "mean"))  return("Mean WT")
+  if (str_detect(x_low, "range")) return("Range WT")
+  return("Response")
+}
+
+# Helper: infer site from filename (first token before '_' for locals; 'Global' for globals)
+infer_site_from_name <- function(x, is_global = FALSE) {
+  if (is_global) return("Global")
+  nm <- basename(x)
+  site <- str_split_fixed(nm, "_", 2)[,1]
+  str_to_title(site)
+}
+
+# Helper: find the response column inside a dataframe robustly
+# Tries common patterns; falls back to best regex match.
+detect_response_col <- function(df, response_label) {
+  # common candidates (edit if yours differ)
+  candidates_by_label <- list(
+    "Max WT"   = c("Max_WT","max_WT","MaxWT","maxwt","Max","max"),
+    "Mean WT"  = c("Mean_WT","mean_WT","MeanWT","meanwt","Mean","mean"),
+    "Range WT" = c("Range_WT","range_WT","RangeWT","rangewt","Range","range")
+  )
+  cand <- candidates_by_label[[response_label]]
+  if (is.null(cand)) cand <- character(0)
+
+  # exact or case-insensitive matches first
+  found <- intersect(cand, names(df))
+  if (length(found) > 0) return(found[1])
+
+  # regex fallback by label keyword
+  key <- tolower(str_replace(response_label, " WT", ""))
+  rx  <- paste0("(?i)\\b", key, "\\b|^", key, "_|_", key, "$")
+  m   <- names(df)[str_detect(names(df), rx)]
+  if (length(m) > 0) return(m[1])
+
+  # absolute last-ditch: first numeric column
+  num_cols <- names(df)[map_lgl(df, is.numeric)]
+  if (length(num_cols) == 0) stop("No numeric columns found to use as response.")
+  message("Could not confidently detect the response column; using: ", num_cols[1])
+  num_cols[1]
+}
+```
+
+```{r}
+# Compute Spearman correlations (per file)
+corr_from_file <- function(path, is_global = FALSE) {
+  df <- suppressMessages(readr::read_csv(path, show_col_types = FALSE))
+  resp_label <- infer_response_from_name(path)
+  site_label <- infer_site_from_name(path, is_global)
+
+  resp_col <- detect_response_col(df, resp_label)
+
+  # drop obvious non-predictor columns
+  drop_like <- c("date","day","time","datetime","site","id","station","objectid")
+  keep_num  <- df %>%
+    select(where(is.numeric)) %>%
+    select(-any_of(resp_col))
+
+  # also drop numeric columns with zero variance
+  keep_num <- keep_num %>% select(where(~ sd(.x, na.rm = TRUE) > 0))
+
+  if (ncol(keep_num) == 0) {
+    warning("No usable predictor columns found in: ", basename(path))
+    return(tibble())
+  }
+
+  # compute Spearman rho + p for each predictor
+  res <- map_dfr(names(keep_num), function(p) {
+    x <- df[[resp_col]]
+    y <- keep_num[[p]]
+    ok <- is.finite(x) & is.finite(y)
+    if (sum(ok) < 5) return(tibble(predictor = p, rho = NA_real_, p = NA_real_, n = sum(ok)))
+    ct <- suppressWarnings(cor.test(x[ok], y[ok], method = "spearman", exact = FALSE))
+    tibble(predictor = p, rho = unname(ct$estimate), p = ct$p.value, n = sum(ok))
+  })
+
+  res %>%
+    mutate(site = site_label,
+           response = resp_label) %>%
+    select(site, response, predictor, rho, p, n)
+}
+```
+
+
+```{r}
+# Gather files
+global_files <- c(
+  file.path(data_dir_global, "max_global_data.csv"),
+  file.path(data_dir_global, "mean_global_data.csv"),
+  file.path(data_dir_global, "range_global_data.csv")
+) %>% keep(file.exists)
+
+local_files  <- list.files(data_dir_local, pattern = "_WT_model_data\\.csv$", full.names = TRUE)
+
+```
+
+```{r}
+# Run correlations 
+corr_global <- map_dfr(global_files, ~ corr_from_file(.x, is_global = TRUE))
+corr_local  <- map_dfr(local_files,  ~ corr_from_file(.x, is_global = FALSE))
+corr_all    <- bind_rows(corr_global, corr_local) %>% filter(!is.na(rho))
+
+# Ensure consistent response column order
+corr_all <- corr_all %>%
+  mutate(response = factor(response, levels = c("Mean WT","Max WT","Range WT")),
+         site     = factor(site))  # site order can be adjusted if you want
+```
+
+```{r}
+# Plot: heatmaps per site (rows = predictors, columns = responses) ----
+# Order predictors within each site by decreasing |rho| averaged across responses
+pred_order <- corr_all %>%
+  group_by(site, predictor) %>%
+  summarise(mean_abs = mean(abs(rho), na.rm = TRUE), .groups = "drop") %>%
+  arrange(site, desc(mean_abs)) %>%
+  group_by(site) %>%
+  mutate(rank = row_number()) %>%
+  select(site, predictor, rank)
+
+# Ensure site order: Global first
+site_levels <- c("Global", sort(setdiff(unique(corr_all$site), "Global")))
+plot_df <- corr_all %>%
+  filter(p < 0.05) %>%   # keep only significant correlations
+  left_join(pred_order, by = c("site","predictor")) %>%
+  mutate(
+    predictor = fct_reorder2(predictor, site, -rank, .desc = TRUE),
+    site = factor(site, levels = site_levels)
+  )
+
+p <- ggplot(plot_df, aes(x = response, y = predictor, fill = rho)) +
+  geom_tile() +
+  geom_text(aes(label = sprintf("%.2f", rho)), size = 3) +
+  scale_fill_gradient2(
+  low = "#2166ac",    # softer blue
+  mid = "white", 
+  high = "#b2182b",   # softer red
+  midpoint = 0,
+  limits = c(-1, 1),
+  oob = scales::squish,
+  name = "Spearman ρ") +
+  facet_wrap(~ site, ncol = 4, scales = "free_y") +
+  labs(x = NULL, y = NULL) +
+  theme_minimal(base_size = 11) +
+  theme(
+    panel.grid = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    strip.text = element_text(face = "bold"),
+    plot.title = element_text(face = "bold")
+  )
+
+# Save
+out_path <- file.path(fig_dir, "spearman_corr_heatmaps_daily.png")
+ggsave(out_path, p, width = 14, height = 10, dpi = 300, bg = "white")
+```
+
