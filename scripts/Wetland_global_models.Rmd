@@ -422,9 +422,9 @@ top_vars(results_refined$max_A_rfr, 10)
 top_vars(results_refined$max_A_xgb, 10)
 
 output_dir <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/results"
-readr::write_csv(metrics_overall, file.path(output_dir, "metrics_overall.csv"))
-readr::write_csv(metrics_by_site, file.path(output_dir, "metrics_by_site.csv"))
-readr::write_csv(best_params_long,    file.path(output_dir, "best_params_with_cv_metrics.csv"))
+#readr::write_csv(metrics_overall, file.path(output_dir, "metrics_overall.csv"))
+#readr::write_csv(metrics_by_site, file.path(output_dir, "metrics_by_site.csv"))
+#readr::write_csv(best_params_long,    file.path(output_dir, "best_params_with_cv_metrics.csv"))
 
 ```
 
@@ -738,40 +738,71 @@ fixed_effects_lme <- purrr::imap_dfr(results_lme, ~{
   dplyr::relocate(response, set, alg, ar1_phi)
 
 # Save
-output_dir <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/results"
-readr::write_csv(metrics_overall_lme, file.path(output_dir, "lme_metrics_overall.csv"))
-readr::write_csv(metrics_by_site_lme, file.path(output_dir, "lme_metrics_by_site.csv"))
-readr::write_csv(fixed_effects_lme,  file.path(output_dir, "lme_fixed_effects.csv"))
+#output_dir <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/results"
+#readr::write_csv(metrics_overall_lme, file.path(output_dir, "lme_metrics_overall.csv"))
+#readr::write_csv(metrics_by_site_lme, file.path(output_dir, "lme_metrics_by_site.csv"))
+#readr::write_csv(fixed_effects_lme,  file.path(output_dir, "lme_fixed_effects.csv"))
 
 ```
 
 *VIF table*
 ```{r}
+# ---- helper: for each var in x, find the var in y most correlated with it ----
+most_corr_partner <- function(df, x_vars, y_vars, method = "pearson") {
+  x_vars <- intersect(x_vars, names(df))
+  y_vars <- intersect(y_vars, names(df))
+  if (length(x_vars) == 0 || length(y_vars) == 0) {
+    # return empty tibble but with the expected columns
+    return(tibble(predictor = character(), partner = character(), r = numeric()))
+  }
+  cors <- suppressWarnings(cor(df[, x_vars, drop = FALSE],
+                               df[, y_vars, drop = FALSE],
+                               use = "pairwise.complete.obs",
+                               method = method))
+  if (!is.matrix(cors)) cors <- as.matrix(cors)
+  if (length(x_vars) == 1 && length(y_vars) > 1) cors <- t(cors)
+
+  purrr::map_dfr(seq_along(x_vars), function(i) {
+    rvec <- cors[i, ]
+    if (length(rvec) == 0 || all(is.na(rvec))) {
+      tibble(predictor = x_vars[i], partner = NA_character_, r = NA_real_)
+    } else {
+      j <- which.max(abs(rvec))
+      tibble(predictor = x_vars[i], partner = names(rvec)[j], r = unname(rvec[j]))
+    }
+  })
+}
+
 # ---- Build ONE long VIF log file (before/after + dropped) ----
-# Uses full-data frames to compute VIFs consistently per (response, set)
 vif_log_long <- purrr::imap_dfr(results_lme, function(res, model_id) {
   parts <- strsplit(model_id, "_", fixed = TRUE)[[1]]
   response <- parts[1]
   set_key  <- parts[2]
   alg      <- "lme"
 
-  # Recreate the full dataset used for this response+set (same logic as your runners)
+  # Recreate dataset
   df_src <- switch(response, max = max_df, mean = mean_df, range = range_df)
   ps <- prep_dataset(df_src, response, mode = ifelse(set_key == "A", "all", "remote"))
   full_df <- ps$data
 
-  # BEFORE: VIF on all candidate predictors (predictors_init)
+  # VIFs as before
   vif_before <- safe_vif_long(full_df, res$response, res$predictors_init) %>%
     dplyr::mutate(stage = "before")
-
-  # AFTER: VIF on kept_full (if none kept, produce empty row set)
   vif_after <- safe_vif_long(full_df, res$response, res$kept_full) %>%
     dplyr::mutate(stage = "after")
-
-  # DROPPED: original VIFs for dropped vars (from 'before')
   dropped_info <- vif_before %>%
     dplyr::filter(predictor %in% res$dropped_full) %>%
     dplyr::mutate(stage = "dropped")
+
+  # Add correlation partners for dropped vars
+  corr_partners <- most_corr_partner(full_df, res$dropped_full, res$kept_full, method = "pearson")
+
+  dropped_info <- dropped_info %>%
+    dplyr::left_join(corr_partners, by = "predictor") %>%
+    # Ensure columns exist even if the join added none
+    { if (!"partner" %in% names(.)) dplyr::mutate(., partner = NA_character_) else . } %>%
+    { if (!"r" %in% names(.)) dplyr::mutate(., r = NA_real_) else . } %>%
+    dplyr::rename(partner_most_corr = partner, r_with_partner = r)
 
   dplyr::bind_rows(vif_before, vif_after, dropped_info) %>%
     dplyr::mutate(
@@ -780,11 +811,21 @@ vif_log_long <- purrr::imap_dfr(results_lme, function(res, model_id) {
       alg      = alg,
       dropped  = stage == "dropped"
     ) %>%
-    dplyr::select(response, set, alg, stage, predictor, vif, dropped)
+    dplyr::select(response, set, alg, stage, predictor, vif,
+                  partner_most_corr, r_with_partner, dropped)
 })
 
-# Save single long file
-readr::write_csv(vif_log_long, file.path(output_dir, "lme_vif_log_long.csv"))
+# ---- Define output directory ----
+output_dir <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/results"
+dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+
+# ---- Save ----
+readr::write_csv(
+  vif_log_long,
+  file.path(output_dir, "lme_vif_log_long.csv")
+)
+
+
 
 ```
 
@@ -1173,4 +1214,5 @@ ggsave(file.path(fig_dir, "obs_vs_pred_plot.png"),
        combined, width = 14, height = 8.8, units = "in", dpi = 300, bg = "white")
 
 ```
+
 

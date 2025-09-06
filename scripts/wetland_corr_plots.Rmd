@@ -185,6 +185,7 @@ ggsave(out_path, p, width = 14, height = 10, dpi = 300, bg = "white")
 library(tidyverse)
 library(readr)
 library(stringr)
+library(lubridate)
 library(ggcorrplot)
 
 # ----- Paths -----
@@ -196,34 +197,106 @@ fig_dir         <- file.path(base_dir, "figures", "corr_plots")
 dir.create(fig_dir, recursive = TRUE, showWarnings = FALSE)
 
 # ----- Settings -----
-COR_METHOD <- "pearson"  # or "spearman"
+COR_METHOD <- "pearson"   # or "spearman"
+DAILY_FUN  <- mean        # use mean for daily aggregation (switch to max if you prefer)
 
 # ----- Helpers -----
-# Returns a clean predictor-only dataframe
+
+# Try to extract a Date column from common date/time fields
+detect_date_column <- function(df) {
+  nms <- names(df)
+
+  # 1) Already a Date?
+  if ("Date" %in% nms && inherits(df$Date, "Date")) return(df$Date)
+
+  # 2) String/number 'Date' that can be parsed
+  if ("Date" %in% nms && !inherits(df$Date, "Date")) {
+    d_try <- suppressWarnings(as.Date(df$Date))
+    if (any(!is.na(d_try))) return(d_try)
+    # try common formats
+    d_try2 <- suppressWarnings(parse_date_time(df$Date, orders = c("Y-m-d","m/d/Y","d/m/Y","Ymd")))
+    if (any(!is.na(d_try2))) return(as.Date(d_try2))
+  }
+
+  # 3) Datetime variants
+  dt_names <- c("Datetime","DateTime","date_time","dateTime","timestamp","Timestamp")
+  dt_col   <- dt_names[dt_names %in% nms]
+  if (length(dt_col) > 0) {
+    dt <- df[[dt_col[1]]]
+    if (inherits(dt, "POSIXct") || inherits(dt, "POSIXt")) return(as.Date(dt))
+    dt_try <- suppressWarnings(parse_date_time(dt, orders = c(
+      "Y-m-d H:M:S","Y-m-d H:M","m/d/Y H:M:S","m/d/Y H:M","Ymd HMS","Ymd HM"
+    )))
+    if (any(!is.na(dt_try))) return(as.Date(dt_try))
+  }
+
+  # 4) Separate Date + Time columns → use Date
+  if (all(c("Date","Time") %in% nms)) {
+    d_try <- suppressWarnings(parse_date_time(paste(df$Date, df$Time),
+                                              orders = c("Y-m-d H:M:S","m/d/Y H:M:S","m/d/Y H:M","Ymd HMS","Ymd HM")))
+    if (any(!is.na(d_try))) return(as.Date(d_try))
+  }
+
+  # 5) Looks like nothing usable
+  return(NULL)
+}
+
+# Keep only predictor columns (numeric, no responses, no date/id-like)
 select_predictors <- function(df) {
-  # Convert numeric-like to numeric
-  df_num <- df %>% mutate(across(everything(), ~ suppressWarnings(as.numeric(.)))) 
-  
-  # Drop obvious non-predictors
+  # Numeric-ify softly
+  df_num <- df %>% mutate(across(everything(), ~ suppressWarnings(as.numeric(.))))
+
+  # Drop obvious non-predictors by name
   drop_name_pat <- "(?i)^(date|datetime|time|timestamp|id|objectid)$"
   df_num <- df_num %>% select(!matches(drop_name_pat))
-  
+
   # Keep only numeric columns
   df_num <- df_num %>% select(where(is.numeric))
-  
-  # Drop obvious responses (WT / temp)
+
+  # Drop obvious response columns (WT / temperature variants)
   resp_pat <- "(?i)(^|_)((mean|max|range).*(wt|temp|temperature)|(mmwt|mean_wt|max_wt|range_wt|mean_temp|max_temp|range_temp))($|_)"
   df_num <- df_num %>% select(!matches(resp_pat))
-  
+
   # Drop columns with <3 finite values or zero variance
   keep_cols <- df_num %>%
     summarise(across(everything(), ~{
       v <- .x[is.finite(.x)]
       (length(v) >= 3) && sd(v) > 0
-    })) %>% 
+    })) %>%
     as.list() %>% unlist()
-  
+
   df_num[, keep_cols, drop = FALSE]
+}
+
+# Aggregate predictors to daily using DAILY_FUN (default = mean)
+aggregate_predictors_daily <- function(df) {
+  dcol <- detect_date_column(df)
+  preds <- select_predictors(df)
+
+  # If no date detected, just return predictors as-is (hourly or whatever)
+  if (is.null(dcol)) {
+    message("  No date/datetime found → using raw rows (no daily aggregation).")
+    return(preds)
+  }
+
+  dat <- bind_cols(.date = dcol, preds)
+
+  daily <- dat %>%
+    filter(!is.na(.date)) %>%
+    group_by(.date) %>%
+    summarise(across(-.date, ~ DAILY_FUN(., na.rm = TRUE)), .groups = "drop")
+
+  # After aggregation, drop zero-variance / too-sparse again
+  keep_cols <- daily %>%
+    select(-.date) %>%
+    summarise(across(everything(), ~{
+      v <- .x[is.finite(.x)]
+      (length(v) >= 3) && sd(v) > 0
+    })) %>% as.list() %>% unlist()
+
+  daily %>%
+    select(-.date) %>%
+    { .[, keep_cols, drop = FALSE] }
 }
 
 # Build correlation matrix safely
@@ -236,21 +309,23 @@ safe_cor <- function(df_pred, method = COR_METHOD) {
 process_one_file <- function(filepath) {
   nm <- tools::file_path_sans_ext(basename(filepath))
   message("Processing: ", nm)
-  
+
   df <- readr::read_csv(filepath, show_col_types = FALSE)
-  preds <- select_predictors(df)
-  
-  if (ncol(preds) < 2) {
-    message("  Skipped (fewer than 2 usable predictor columns).")
+
+  # ---- daily aggregation of predictors ----
+  preds_daily <- aggregate_predictors_daily(df)
+
+  if (ncol(preds_daily) < 2) {
+    message("  Skipped (fewer than 2 usable daily predictor columns).")
     return(invisible(NULL))
-  }
-  
-  cmat <- safe_cor(preds)
+    }
+
+  cmat <- safe_cor(preds_daily)
   if (is.null(cmat)) {
     message("  Skipped (no correlation matrix).")
     return(invisible(NULL))
   }
-  
+
   # Plot heatmap (upper triangle) with white background
   p <- ggcorrplot(
     cmat,
@@ -261,19 +336,19 @@ process_one_file <- function(filepath) {
     ggtheme = ggplot2::theme_minimal(base_size = 11)
   ) +
     labs(
-      title = paste0("Predictor Correlations (", COR_METHOD, "): ", nm)
+      title = paste0("Predictor Correlations (", COR_METHOD, ", daily ", deparse(substitute(DAILY_FUN)), "): ", nm)
     ) +
     theme(
-      plot.background = element_rect(fill = "white", color = NA),
-      panel.background = element_rect(fill = "white", color = NA),
+      plot.background   = element_rect(fill = "white", color = NA),
+      panel.background  = element_rect(fill = "white", color = NA),
       legend.background = element_rect(fill = "white", color = NA),
-      plot.title = element_text(face = "bold", size = 13, margin = margin(b = 8))
+      plot.title        = element_text(face = "bold", size = 13, margin = margin(b = 8))
     )
-  
-  out_png <- file.path(fig_dir, paste0(nm, "_corr_heatmap.png"))
+
+  out_png <- file.path(fig_dir, paste0(nm, "_corr_heatmap_daily.png"))
   ggsave(out_png, p, width = 9.5, height = 7.5, dpi = 300, bg = "white")
   message("  Plot saved: ", out_png)
-  
+
   invisible(out_png)
 }
 
@@ -284,8 +359,8 @@ global_files <- c(
 ) %>% keep(file.exists)
 
 site_files <- list.files(
-  data_dir_local, 
-  pattern = "\\.csv$", 
+  data_dir_local,
+  pattern = "\\.csv$",
   full.names = TRUE
 ) %>% keep(file.exists)
 
@@ -298,8 +373,12 @@ if (length(all_files) == 0L) {
 # ----- Run -----
 walk(all_files, process_one_file)
 
-message("\nDone. Heatmaps → ", fig_dir,
-        "\nEach file gets its own PNG.")
+message(
+  "\nDone. Heatmaps → ", fig_dir,
+  "\nAggregation: daily ", deparse(substitute(DAILY_FUN)), " on predictor columns.",
+  "\n(If no date field was found in a file, it falls back to raw rows.)"
+)
+
 
 
 ```

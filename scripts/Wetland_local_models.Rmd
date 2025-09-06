@@ -939,6 +939,58 @@ safe_vif_long <- function(df, response, preds) {
   tibble::tibble(predictor = names(vif_vec), vif = as.numeric(vif_vec))
 }
 
+# For each dropped var, find the kept var with the largest |Pearson r|
+most_corr_partner_local <- function(df, dropped_vars, kept_vars, response_col, method = "pearson") {
+  dropped_vars <- intersect(dropped_vars, names(df))
+  kept_vars    <- intersect(kept_vars,    names(df))
+  if (length(dropped_vars) == 0 || length(kept_vars) == 0) {
+    return(tibble::tibble(predictor = character(), partner = character(), r = numeric()))
+  }
+
+  # numeric-only from union (exclude response)
+  union_vars <- setdiff(unique(c(dropped_vars, kept_vars)), response_col)
+  num_df <- df %>%
+    dplyr::select(dplyr::any_of(union_vars)) %>%
+    dplyr::mutate(dplyr::across(dplyr::everything(), ~ suppressWarnings(as.numeric(.)))) %>%
+    dplyr::select(where(is.numeric))
+
+  # drop <3 finite or zero-variance
+  keep_cols <- num_df %>%
+    summarise(across(everything(), ~{
+      v <- .x[is.finite(.x)]
+      (length(v) >= 3) && stats::sd(v) > 0
+    })) %>% as.list() %>% unlist()
+  num_df <- num_df[, keep_cols, drop = FALSE]
+  if (ncol(num_df) == 0) {
+    return(tibble::tibble(predictor = character(), partner = character(), r = numeric()))
+  }
+
+  left  <- intersect(dropped_vars, colnames(num_df))
+  right <- intersect(kept_vars,    colnames(num_df))
+  if (length(left) == 0 || length(right) == 0) {
+    return(tibble::tibble(predictor = character(), partner = character(), r = numeric()))
+  }
+
+  cors <- suppressWarnings(cor(num_df[, left,  drop = FALSE],
+                               num_df[, right, drop = FALSE],
+                               use = "pairwise.complete.obs",
+                               method = method))
+  if (!is.matrix(cors)) cors <- as.matrix(cors)
+  if (length(left) == 1 && length(right) > 1) cors <- t(cors)
+
+  purrr::map_dfr(seq_along(left), function(i) {
+    rvec <- cors[i, ]
+    if (length(rvec) == 0 || all(is.na(rvec))) {
+      tibble::tibble(predictor = left[i], partner = NA_character_, r = NA_real_)
+    } else {
+      j <- which.max(abs(rvec))
+      tibble::tibble(predictor = left[i], partner = names(rvec)[j], r = unname(rvec[j]))
+    }
+  })
+}
+
+
+
 ```
 
 *More model setup: AR(1) structure, fixed effects, etc.*
@@ -1171,7 +1223,7 @@ fixed_effects_local_lme <- purrr::imap_dfr(local_lme_results, ~{
 readr::write_csv(fixed_effects_local_lme, file.path(out_dir, "gls_fixed_effects_local.csv"))
 
 
-# VIF log (before/after/dropped) — uses safe_vif_long() and res$full_data
+# VIF log (before/after/dropped) — with most-correlated kept partner for DROPPED
 vif_log_local_lme <- purrr::imap_dfr(local_lme_results, function(res, model_id) {
   parts <- strsplit(model_id, "_", fixed = TRUE)[[1]]
   Site <- parts[1]; Metric <- parts[2]; Set <- parts[3]
@@ -1184,18 +1236,34 @@ vif_log_local_lme <- purrr::imap_dfr(local_lme_results, function(res, model_id) 
         dplyr::filter(predictor %in% res$dropped_full) %>%
         dplyr::mutate(stage = "dropped")
 
+  # Add partner + r for DROPPED vs KEPT
+  corr_partners <- most_corr_partner_local(
+    df = res$full_data,
+    dropped_vars = res$dropped_full,
+    kept_vars    = res$kept_full,
+    response_col = res$response,
+    method = "pearson"
+  )
+
+  vd <- vd %>%
+    dplyr::left_join(corr_partners, by = "predictor") %>%
+    { if (!"partner" %in% names(.)) dplyr::mutate(., partner = NA_character_) else . } %>%
+    { if (!"r" %in% names(.))       dplyr::mutate(., r = NA_real_)       else . } %>%
+    dplyr::rename(partner_most_corr = partner, r_with_partner = r)
+
   dplyr::bind_rows(vb, va, vd) %>%
     dplyr::mutate(Site = Site, Metric = Metric, Set = Set, alg = "gls_ar1",
                   dropped = stage == "dropped") %>%
-    dplyr::select(Site, Metric, Set, alg, stage, predictor, vif, dropped)
+    dplyr::select(Site, Metric, Set, alg, stage, predictor, vif,
+                  partner_most_corr, r_with_partner, dropped)
 }, .id = NULL)
 
-readr::write_csv(vif_log_local_lme, file.path(out_dir, "gls_vif_log_long_local.csv"))
+readr::write_csv(
+  vif_log_local_lme,
+  file.path(out_dir, "gls_vif_log_long_local.csv")
+)
 
-message("Done. Results at: ", out_dir, 
-        "\n  - gls_metrics_local.csv",
-        "\n  - gls_fixed_effects_local.csv",
-        "\n  - gls_vif_log_long_local.csv")
+
 ```
 
 *Permutation variable importances*
