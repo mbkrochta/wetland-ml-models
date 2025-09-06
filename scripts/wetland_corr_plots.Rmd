@@ -179,3 +179,128 @@ out_path <- file.path(fig_dir, "spearman_corr_heatmaps_daily.png")
 ggsave(out_path, p, width = 14, height = 10, dpi = 300, bg = "white")
 ```
 
+*Corrplots for datasets to determine colinearity*
+```{r}
+# ----- Packages -----
+library(tidyverse)
+library(readr)
+library(stringr)
+library(ggcorrplot)
+
+# ----- Paths -----
+base_dir        <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models"
+data_dir_global <- file.path(base_dir, "data")
+data_dir_local  <- file.path(base_dir, "data", "local_mod_data")
+fig_dir         <- file.path(base_dir, "figures", "corr_plots")
+
+dir.create(fig_dir, recursive = TRUE, showWarnings = FALSE)
+
+# ----- Settings -----
+COR_METHOD <- "pearson"  # or "spearman"
+
+# ----- Helpers -----
+# Returns a clean predictor-only dataframe
+select_predictors <- function(df) {
+  # Convert numeric-like to numeric
+  df_num <- df %>% mutate(across(everything(), ~ suppressWarnings(as.numeric(.)))) 
+  
+  # Drop obvious non-predictors
+  drop_name_pat <- "(?i)^(date|datetime|time|timestamp|id|objectid)$"
+  df_num <- df_num %>% select(!matches(drop_name_pat))
+  
+  # Keep only numeric columns
+  df_num <- df_num %>% select(where(is.numeric))
+  
+  # Drop obvious responses (WT / temp)
+  resp_pat <- "(?i)(^|_)((mean|max|range).*(wt|temp|temperature)|(mmwt|mean_wt|max_wt|range_wt|mean_temp|max_temp|range_temp))($|_)"
+  df_num <- df_num %>% select(!matches(resp_pat))
+  
+  # Drop columns with <3 finite values or zero variance
+  keep_cols <- df_num %>%
+    summarise(across(everything(), ~{
+      v <- .x[is.finite(.x)]
+      (length(v) >= 3) && sd(v) > 0
+    })) %>% 
+    as.list() %>% unlist()
+  
+  df_num[, keep_cols, drop = FALSE]
+}
+
+# Build correlation matrix safely
+safe_cor <- function(df_pred, method = COR_METHOD) {
+  if (ncol(df_pred) < 2) return(NULL)
+  suppressWarnings(cor(df_pred, use = "pairwise.complete.obs", method = method))
+}
+
+# Save heatmap for one file
+process_one_file <- function(filepath) {
+  nm <- tools::file_path_sans_ext(basename(filepath))
+  message("Processing: ", nm)
+  
+  df <- readr::read_csv(filepath, show_col_types = FALSE)
+  preds <- select_predictors(df)
+  
+  if (ncol(preds) < 2) {
+    message("  Skipped (fewer than 2 usable predictor columns).")
+    return(invisible(NULL))
+  }
+  
+  cmat <- safe_cor(preds)
+  if (is.null(cmat)) {
+    message("  Skipped (no correlation matrix).")
+    return(invisible(NULL))
+  }
+  
+  # Plot heatmap (upper triangle) with white background
+  p <- ggcorrplot(
+    cmat,
+    hc.order = TRUE,
+    type = "upper",
+    lab = FALSE,
+    outline.col = "grey85",
+    ggtheme = ggplot2::theme_minimal(base_size = 11)
+  ) +
+    labs(
+      title = paste0("Predictor Correlations (", COR_METHOD, "): ", nm)
+    ) +
+    theme(
+      plot.background = element_rect(fill = "white", color = NA),
+      panel.background = element_rect(fill = "white", color = NA),
+      legend.background = element_rect(fill = "white", color = NA),
+      plot.title = element_text(face = "bold", size = 13, margin = margin(b = 8))
+    )
+  
+  out_png <- file.path(fig_dir, paste0(nm, "_corr_heatmap.png"))
+  ggsave(out_png, p, width = 9.5, height = 7.5, dpi = 300, bg = "white")
+  message("  Plot saved: ", out_png)
+  
+  invisible(out_png)
+}
+
+# ----- Files to process -----
+global_files <- c(
+  file.path(data_dir_global, "mean_global_data.csv"),
+  file.path(data_dir_global, "max_global_data.csv")
+) %>% keep(file.exists)
+
+site_files <- list.files(
+  data_dir_local, 
+  pattern = "\\.csv$", 
+  full.names = TRUE
+) %>% keep(file.exists)
+
+all_files <- c(global_files, site_files)
+
+if (length(all_files) == 0L) {
+  stop("No CSV files found. Check the paths.")
+}
+
+# ----- Run -----
+walk(all_files, process_one_file)
+
+message("\nDone. Heatmaps → ", fig_dir,
+        "\nEach file gets its own PNG.")
+
+
+```
+
