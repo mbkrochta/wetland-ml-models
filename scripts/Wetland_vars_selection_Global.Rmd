@@ -142,4 +142,28 @@ write.csv(range_model_final, file.path(output_dir, "range_global_data.csv"), row
 
 ```
 
+*Getting summary statistics for each site*
+
+```{r}
+df <- read.csv("C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/data/daily_wetlands_dataset.csv")
+
+# Summarize by Site with means and standard deviations
+site_summary <- df %>%
+  group_by(Site) %>%
+  summarise(
+    mean_meanWT   = mean(mean_WT, na.rm = TRUE),
+    sd_meanWT     = sd(mean_WT, na.rm = TRUE),
+    mean_maxWT    = mean(max_WT, na.rm = TRUE),
+    sd_maxWT      = sd(max_WT, na.rm = TRUE),
+    mean_minWT    = mean(min_WT, na.rm = TRUE),
+    sd_minWT      = sd(min_WT, na.rm = TRUE),
+    mean_rangeWT  = mean(range_WT, na.rm = TRUE),
+    sd_rangeWT    = sd(range_WT, na.rm = TRUE)
+  )
+
+print(site_summary)
+
+output_dir <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/data"
+write.csv(site_summary, file.path(output_dir, "site_summary_table.csv"), row.names = FALSE)
+```
 
