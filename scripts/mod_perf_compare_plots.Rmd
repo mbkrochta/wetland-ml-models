@@ -59,6 +59,7 @@ plot_save_set("B")
 *Global models and local models compare plot (use this one)*
 ```{r}
 library(tidyverse)
+library(ggh4x)
 
 # --- Paths ---
 perf_global_dir <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/results/model_performance"
@@ -109,6 +110,31 @@ loc_all <- bind_rows(
     set = toupper(set)
   )
 
+# ----- Shared y-limits (per response) across Set A & B -----
+alg_levels <- c("GLS","RFR","XGB")
+
+ylims_by_resp <- bind_rows(
+  glob_all %>% select(response, RMSE),
+  loc_all  %>% select(response, RMSE)
+) %>%
+  group_by(response) %>%
+  summarise(
+    ymin = 0,
+    ymax = max(RMSE, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  # bump to a "nice" tick just above the max
+  mutate(ymax = max(pretty(c(0, ymax))))
+
+# Build a small data frame to "pin" facet limits
+ylims_df <- tidyr::expand_grid(
+  response = unique(ylims_by_resp$response),
+  alg      = factor(alg_levels, levels = alg_levels)
+) %>%
+  left_join(ylims_by_resp, by = "response") %>%
+  tidyr::pivot_longer(c(ymin, ymax), names_to = "which", values_to = "RMSE")
+
+
 # ---------- Plot function (one set at a time) ----------
 plot_local_vs_global <- function(set_letter = "A") {
   dd_local <- loc_all %>% filter(set == set_letter)
@@ -123,54 +149,53 @@ plot_local_vs_global <- function(set_letter = "A") {
   site_levels <- sort(unique(dd_local$Site))
   site_pal <- site_pal[names(site_pal) %in% site_levels]
 
-  p <- ggplot() +
-    # Local, by site (colored lines + solid points)
-    geom_line(
-      data = dd_local,
-      aes(x = alg, y = RMSE, group = Site, color = Site),
-      linewidth = 0.9, alpha = 0.95
-    ) +
-    geom_point(
-      data = dd_local,
-      aes(x = alg, y = RMSE, color = Site),
-      size = 2.4, alpha = 1
-    ) +
-    # Global overall (black dashed line + hollow point, with its own legend key)
-    # Option A: group by response (since you facet by response)
-geom_line(
-  data = dd_glob,
-  aes(x = alg, y = RMSE, group = response, linetype = "Global (overall)"),
-  color = "black", linewidth = 0.9
-) +
-
-     
-    geom_point(
-      data = dd_glob,
-      aes(x = alg, y = RMSE, shape = "Global (overall)"),
-      color = "black", fill = "white", stroke = 1.1, size = 2.8
-    ) +
-    facet_wrap(~ response, scales = "free_y") +
-    scale_color_manual(values = site_pal, name = "Site") +
-    scale_linetype_manual(values = c("Global (overall)" = "dashed")) +
-    scale_shape_manual(values = c("Global (overall)" = 21)) +
-    guides(
-      # We only want ONE small legend key for the global reference:
-      linetype = "none",
-      shape = guide_legend(
-        title = NULL,
-        override.aes = list(linetype = "dashed", color = "black", fill = "white", size = 3)
-      ),
-      color = guide_legend(title = "Site")
-    ) +
-    labs(x = "Algorithm", y = "RMSE (°C)") +
-    theme_minimal(base_size = 12) +
-    theme(
-      panel.grid.minor = element_blank(),
-      legend.position  = "bottom",
-      legend.box       = "vertical",
-      strip.text       = element_text(face = "bold")
-    )
-
+p <- ggplot() +
+  # enforce shared per-response y ranges across Set A & Set B
+  geom_blank(data = ylims_df, aes(x = alg, y = RMSE)) +
+  # Local, by site
+  geom_line(
+    data = dd_local,
+    aes(x = alg, y = RMSE, group = Site, color = Site),
+    linewidth = 0.9, alpha = 0.95
+  ) +
+  geom_point(
+    data = dd_local,
+    aes(x = alg, y = RMSE, color = Site),
+    size = 2.4, alpha = 1
+  ) +
+  # Global reference
+  geom_line(
+    data = dd_glob,
+    aes(x = alg, y = RMSE, group = response, linetype = "Global (overall)"),
+    color = "black", linewidth = 0.9
+  ) +
+  geom_point(
+    data = dd_glob,
+    aes(x = alg, y = RMSE, shape = "Global (overall)"),
+    color = "black", fill = "white", stroke = 1.1, size = 2.8
+  ) +
+ facet_grid2(~ response, scales = "free_y", axes = "margins") +
+  scale_color_manual(values = site_pal, name = "Site") +
+  scale_linetype_manual(values = c("Global (overall)" = "dashed")) +
+  scale_shape_manual(values = c("Global (overall)" = 21)) +
+  guides(
+    linetype = "none",
+    shape = guide_legend(
+      title = NULL,
+      override.aes = list(linetype = "dashed", color = "black", fill = "white", size = 3)
+    ),
+    color = guide_legend(title = "Site")
+  ) +
+  labs(x = "Algorithm", y = "RMSE (°C)") +
+  theme_minimal(base_size = 12) +
+  theme(
+  panel.grid.minor = element_blank(),
+  legend.position  = "bottom",
+  legend.box       = "vertical",
+  strip.text       = element_text(face = "bold"),
+  axis.title.y     = element_text(),
+  strip.background = element_blank()
+)
   outfile <- file.path(
     fig_dir,
     paste0("local_vs_global_RMSE_Set", set_letter, ".png")
@@ -186,7 +211,95 @@ plot_local_vs_global("B")
 
 
 ```
-*Plotting global site-level metrics with global models (probably for interpretation only)*
+```{r}
+# Ensure Set is a nice factor for row strips
+glob_all <- glob_all %>%
+  mutate(set = factor(set, levels = c("A","B"), labels = c("Full","Partial")))
+loc_all  <- loc_all  %>%
+  mutate(set = factor(set, levels = c("A","B"), labels = c("Full","Partial")))
+
+# Rebuild y-limits df with Full/Partial (prevents NA facet rows)
+ylims_df <- tidyr::expand_grid(
+  response = unique(ylims_by_resp$response),
+  alg      = factor(alg_levels, levels = alg_levels),
+  set      = c("Full","Partial")
+) %>%
+  dplyr::left_join(ylims_by_resp, by = "response") %>%
+  tidyr::pivot_longer(c(ymin, ymax), names_to = "which", values_to = "RMSE")
+
+# Site palette (all 7)
+site_pal <- c(
+  Anvil = "#E67E80", Butte = "#8AADF4", Cooper = "#A6D189",
+  Crater = "#C6A0F6", Hideaway = "#7DC4E4", Pint = "#E5C890", Sam = "#F4B8E4"
+)
+
+# Combined plot (two rows = Full/Partial; three columns = responses)
+p_combined <- ggplot() +
+  # pin shared per-response baseline/max
+  geom_blank(data = ylims_df, aes(x = alg, y = RMSE)) +
+
+  # local results
+  geom_line(
+    data = loc_all,
+    aes(x = alg, y = RMSE, group = interaction(Site, set), color = Site),
+    linewidth = 0.9, alpha = 0.95
+  ) +
+  geom_point(
+    data = loc_all,
+    aes(x = alg, y = RMSE, color = Site),
+    size = 2.4
+  ) +
+
+  # global references
+  geom_line(
+    data = glob_all,
+    aes(x = alg, y = RMSE, group = response, linetype = "Global (overall)"),
+    color = "black", linewidth = 0.9
+  ) +
+  geom_point(
+    data = glob_all,
+    aes(x = alg, y = RMSE, shape = "Global (overall)"),
+    color = "black", fill = "white", stroke = 1.1, size = 2.8
+  ) +
+
+  # facets: rows = Full/Partial, cols = responses; axes only on outer margins
+  ggh4x::facet_grid2(set ~ response, scales = "free_y", axes = "margins") +
+
+  # HARD CAP Full row to [0, 2]; leave Partial free
+  ggh4x::facetted_pos_scales(
+    y = list(
+      set == "Full"     ~ scale_y_continuous(limits = c(0, 2)),
+      set == "Partial"  ~ scale_y_continuous(expand = expansion(mult = c(0, 0.04)))
+    )
+  ) +
+
+  # legend & styling
+  scale_color_manual(values = site_pal, name = "Site", drop = FALSE) +
+  scale_linetype_manual(values = c("Global (overall)" = "dashed"), guide = "legend") +
+  scale_shape_manual(values = c("Global (overall)" = 21), guide = "legend") +
+  guides(
+    linetype = guide_legend(title = NULL, override.aes = list(color = "black")),
+    shape    = guide_legend(title = NULL, override.aes = list(color = "black", fill = "white", size = 3)),
+    color    = guide_legend(title = "Site")
+  ) +
+  labs(x = "Algorithm", y = "RMSE (°C)") +
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid.minor = element_blank(),
+    legend.position  = "bottom",
+    legend.box       = "vertical",
+    strip.text       = element_text(face = "bold")
+  )
+
+# Save
+outfile <- file.path(fig_dir, "local_vs_global_RMSE_Combined_Full_Partial.png")
+ggsave(outfile, p_combined, width = 11, height = 10, dpi = 300, bg = "white")
+message("Saved: ", outfile)
+
+```
+
+
+*Plotting GLOBAL site-level metrics with global models (probably for interpretation only)*
 ```{r}
 # --- Paths ---
 perf_global_dir <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/results/model_performance"

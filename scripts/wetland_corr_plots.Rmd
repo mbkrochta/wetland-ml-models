@@ -126,6 +126,33 @@ corr_global <- map_dfr(global_files, ~ corr_from_file(.x, is_global = TRUE))
 corr_local  <- map_dfr(local_files,  ~ corr_from_file(.x, is_global = FALSE))
 corr_all    <- bind_rows(corr_global, corr_local) %>% filter(!is.na(rho))
 
+# Fixed prefix order for plotting
+prefix_order <- c("WL","GWL","GWT","Water_area","Solar","Air","ppt","Elev","Size_km2")
+
+get_prefix <- function(x) {
+  case_when(
+    str_starts(x, "GWL")        ~ "GWL",        # check longer first
+    str_starts(x, "GWT")        ~ "GWT",
+    str_starts(x, "WL")         ~ "WL",
+    str_starts(x, "Water_area") ~ "Water_area",
+    str_starts(x, "Solar")      ~ "Solar",
+    str_starts(x, "Air")        ~ "Air",
+    str_starts(x, "ppt")        ~ "ppt",
+    str_starts(x, "Elev")       ~ "Elev",
+    str_starts(x, "Size_km2")   ~ "Size_km2",
+    TRUE                        ~ "zzz"         # anything else to the bottom
+  )
+}
+
+# Build global predictor level order once (group first, then name)
+pred_levels <- corr_all %>%
+  mutate(.prefix = get_prefix(predictor),
+         .pidx   = match(.prefix, prefix_order)) %>%
+  arrange(.pidx, predictor) %>%
+  distinct(predictor) %>%
+  pull(predictor)
+
+
 # Ensure consistent response column order
 corr_all <- corr_all %>%
   mutate(response = factor(response, levels = c("Mean WT","Max WT","Range WT")),
@@ -135,35 +162,33 @@ corr_all <- corr_all %>%
 ```{r}
 # Plot: heatmaps per site (rows = predictors, columns = responses) ----
 # Order predictors within each site by decreasing |rho| averaged across responses
-pred_order <- corr_all %>%
-  group_by(site, predictor) %>%
-  summarise(mean_abs = mean(abs(rho), na.rm = TRUE), .groups = "drop") %>%
-  arrange(site, desc(mean_abs)) %>%
-  group_by(site) %>%
-  mutate(rank = row_number()) %>%
-  select(site, predictor, rank)
-
 # Ensure site order: Global first
 site_levels <- c("Global", sort(setdiff(unique(corr_all$site), "Global")))
+
 plot_df <- corr_all %>%
-  filter(p < 0.05) %>%   # keep only significant correlations
-  left_join(pred_order, by = c("site","predictor")) %>%
+  filter(p < 0.05) %>%
   mutate(
-    predictor = fct_reorder2(predictor, site, -rank, .desc = TRUE),
-    site = factor(site, levels = site_levels)
+    site      = factor(site, levels = site_levels),
+    predictor = factor(predictor, levels = pred_levels)  # fixed, cross-site
   )
+
 
 p <- ggplot(plot_df, aes(x = response, y = predictor, fill = rho)) +
   geom_tile() +
   geom_text(aes(label = sprintf("%.2f", rho)), size = 3) +
+  scale_y_discrete(
+    drop   = TRUE,
+    limits = function(x) intersect(rev(pred_levels), x)
+  ) +
   scale_fill_gradient2(
-  low = "#2166ac",    # softer blue
-  mid = "white", 
-  high = "#b2182b",   # softer red
-  midpoint = 0,
-  limits = c(-1, 1),
-  oob = scales::squish,
-  name = "Spearman ρ") +
+    low = "#2166ac",
+    mid = "white",
+    high = "#b2182b",
+    midpoint = 0,
+    limits = c(-1, 1),
+    oob = scales::squish,
+    name = "Spearman ρ"
+  ) +
   facet_wrap(~ site, ncol = 4, scales = "free_y") +
   labs(x = NULL, y = NULL) +
   theme_minimal(base_size = 11) +
@@ -174,9 +199,12 @@ p <- ggplot(plot_df, aes(x = response, y = predictor, fill = rho)) +
     plot.title = element_text(face = "bold")
   )
 
+
 # Save
 out_path <- file.path(fig_dir, "spearman_corr_heatmaps_daily.png")
 ggsave(out_path, p, width = 14, height = 10, dpi = 300, bg = "white")
+message("Saved: ", normalizePath(out_path, winslash = "/"))
+print(file.info(out_path)$mtime)
 ```
 
 *Corrplots for datasets to determine colinearity*

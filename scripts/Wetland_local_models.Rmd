@@ -1460,6 +1460,24 @@ vi <- vi_raw %>%
   ) %>%
   select(Site, response, alg, Variable, Importance, Stderr)
 
+# Build list of vars (per Site × response) dropped by GLS VIF in Set A
+if (exists("vif_log_local_lme")) {
+  vif_local <- vif_log_local_lme
+} else {
+  vif_local <- readr::read_csv(
+    "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/results/local_lme_results/gls_vif_log_long_local.csv",
+    show_col_types = FALSE
+  )
+}
+
+dropped_local_A <- vif_local %>%
+  dplyr::filter(Set == "A", stage == "dropped") %>%
+  dplyr::mutate(
+    response = dplyr::recode(Metric, max = "Max", mean = "Mean", range = "Range"),
+    var_key  = paste0(response, "__", predictor)
+  ) %>%
+  dplyr::distinct(Site, var_key)
+
 # SITE-SPECIFIC mini-global plot 
 make_site_plot <- function(site_name, top_k = 12, clamp_LME = FALSE) {
 
@@ -1483,6 +1501,17 @@ make_site_plot <- function(site_name, top_k = 12, clamp_LME = FALSE) {
       Importance = dplyr::coalesce(Importance, 0)  # show 0 if a model didn't produce VI
     ) %>%
     inner_join(site_top, by = c("response","Variable","var_key"))
+  
+  dropped_site <- dropped_local_A %>% dplyr::filter(Site == site_name)
+
+  label_map <- plot_df %>%
+    dplyr::distinct(var_key) %>%
+    dplyr::mutate(
+      lbl = ifelse(var_key %in% dropped_site$var_key,
+                   paste0(sub("^.*__", "", var_key), "*"),
+                   sub("^.*__", "", var_key))
+    ) %>%
+    { setNames(.$lbl, .$var_key) }
 
   p <- ggplot(plot_df, aes(x = forcats::fct_reorder(var_key, mean_imp), y = Importance)) +
     geom_col(width = 0.75) +
@@ -1492,7 +1521,7 @@ make_site_plot <- function(site_name, top_k = 12, clamp_LME = FALSE) {
     geom_hline(yintercept = 0, linewidth = 0.4, linetype = "dashed") +
     coord_flip() +
     facet_grid(response ~ alg, scales = "free_y", space = "free_y") +
-    scale_x_discrete(labels = function(x) sub("^.*__", "", x)) +
+    scale_x_discrete(labels = label_map) +
     labs(
       title = paste0("Local variable importance — ", site_name),
       x = "Predictor",

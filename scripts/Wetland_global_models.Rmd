@@ -1022,6 +1022,26 @@ plot_df <- vi_A %>%
     var_key = paste0(response, "__", Variable)
   )
 
+# --- Build labels with * if the var was dropped by LME (Set A) ---
+dropped_A <- vif_log_long %>%
+  dplyr::filter(set == "A", stage == "dropped") %>%
+  dplyr::mutate(
+    response = dplyr::recode(response, max = "Max", mean = "Mean", range = "Range"),
+    var_key  = paste0(response, "__", predictor)
+  ) %>%
+  dplyr::distinct(var_key)
+
+label_map <- plot_df %>%
+  dplyr::transmute(
+    var_key,
+    lbl = ifelse(var_key %in% dropped_A$var_key,
+                 paste0(sub("^.*__", "", var_key), "*"),
+                 sub("^.*__", "", var_key))
+  ) %>%
+  dplyr::distinct() %>%
+  { setNames(.$lbl, .$var_key) }
+
+
 # 5) Optional cosmetic clamp for tiny negatives (noise near zero)
 vi_eps <- 0.00  
 plot_df <- plot_df %>%
@@ -1041,7 +1061,7 @@ p_vi_A <- ggplot(
   coord_flip() +
   facet_grid(response ~ alg, scales = "free_y", space = "free_y") +
   # labels for predictor names
-  scale_x_discrete(labels = function(x) sub("^.*__", "", x)) +
+  scale_x_discrete(labels = label_map) +
   labs(x = "Predictor", y = "Increase in RMSE (°C)") +
   theme_minimal(base_size = 11) +
   theme(
