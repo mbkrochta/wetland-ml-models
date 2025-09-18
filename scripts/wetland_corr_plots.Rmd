@@ -196,13 +196,18 @@ p <- ggplot(plot_df, aes(x = response, y = predictor, fill = rho)) +
     panel.grid = element_blank(),
     axis.text.x = element_text(angle = 45, hjust = 1),
     strip.text = element_text(face = "bold"),
-    plot.title = element_text(face = "bold")
-  )
-
+    plot.title = element_text(face = "bold"),
+    legend.position = "bottom",              # legend underneath
+    legend.key.width = unit(2, "cm"),        # stretch keys
+    legend.title = element_text(face = "bold")
+  ) +
+  guides(fill = guide_colorbar(title.position = "top",
+                               title.hjust = 0.5,
+                               barwidth = 20, barheight = 0.6))  # horizontal bar
 
 # Save
 out_path <- file.path(fig_dir, "spearman_corr_heatmaps_daily.png")
-ggsave(out_path, p, width = 14, height = 10, dpi = 300, bg = "white")
+ggsave(out_path, p, width = 14, height = 12, dpi = 300, bg = "white")
 message("Saved: ", normalizePath(out_path, winslash = "/"))
 print(file.info(out_path)$mtime)
 ```

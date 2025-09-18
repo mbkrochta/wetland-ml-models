@@ -1035,7 +1035,7 @@ label_map <- plot_df %>%
   dplyr::transmute(
     var_key,
     lbl = ifelse(var_key %in% dropped_A$var_key,
-                 paste0(sub("^.*__", "", var_key), "*"),
+                 paste0(sub("^.*__", "", var_key), "\u02E3"),  # superscript x
                  sub("^.*__", "", var_key))
   ) %>%
   dplyr::distinct() %>%
