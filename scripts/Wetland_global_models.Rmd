@@ -422,9 +422,9 @@ top_vars(results_refined$max_A_rfr, 10)
 top_vars(results_refined$max_A_xgb, 10)
 
 output_dir <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/results"
-#readr::write_csv(metrics_overall, file.path(output_dir, "metrics_overall.csv"))
-#readr::write_csv(metrics_by_site, file.path(output_dir, "metrics_by_site.csv"))
-#readr::write_csv(best_params_long,    file.path(output_dir, "best_params_with_cv_metrics.csv"))
+readr::write_csv(metrics_overall, file.path(output_dir, "metrics_overall.csv"))
+readr::write_csv(metrics_by_site, file.path(output_dir, "metrics_by_site.csv"))
+readr::write_csv(best_params_long,    file.path(output_dir, "best_params_with_cv_metrics.csv"))
 
 ```
 
@@ -494,28 +494,45 @@ library(broom)
 vif_prune <- function(train_df, response, preds, thresh = 5) {
   keep <- preds
   dropped <- character(0)
-  # guard: remove constant / near-constant columns
-  nzv <- keep[ sapply(keep, function(v) sd(train_df[[v]], na.rm = TRUE) == 0) ]
+
+  # Guard: remove constant or all-NA predictors first
+  nzv <- keep[sapply(keep, function(v) sd(train_df[[v]], na.rm = TRUE) == 0)]
   if (length(nzv)) {
     keep <- setdiff(keep, nzv)
     dropped <- c(dropped, nzv)
   }
+
   repeat {
-    if (length(keep) == 0L) break
+    if (length(keep) <= 1L) break
+
     fm <- as.formula(paste(response, "~", paste(keep, collapse = "+")))
-    # try-catch in case of singularities
     fit_lm <- try(lm(fm, data = train_df), silent = TRUE)
+
     if (inherits(fit_lm, "try-error")) break
-    v <- suppressWarnings(car::vif(fit_lm))
+
+    # Check for aliased (perfectly collinear) coefficients
+    aliased <- names(coef(fit_lm))[is.na(coef(fit_lm))]
+    if (length(aliased) > 0) {
+      keep <- setdiff(keep, aliased)
+      dropped <- c(dropped, aliased)
+      next
+    }
+
+    # Safely compute VIFs
+    v <- try(suppressWarnings(car::vif(fit_lm)), silent = TRUE)
+    if (inherits(v, "try-error") || any(!is.finite(v))) break
+
     vmax <- max(v, na.rm = TRUE)
-    if (is.infinite(vmax) || is.nan(vmax)) break
     if (vmax <= thresh) break
+
     drop_this <- names(v)[which.max(v)]
     keep <- setdiff(keep, drop_this)
     dropped <- c(dropped, drop_this)
   }
+
   list(keep = keep, dropped = dropped)
 }
+
 
 # Build AR(1) correlation structure on a Date column
 make_cor_ar1 <- function(df, date_col = "Datetime", site_col = "Site") {
@@ -738,10 +755,10 @@ fixed_effects_lme <- purrr::imap_dfr(results_lme, ~{
   dplyr::relocate(response, set, alg, ar1_phi)
 
 # Save
-#output_dir <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/results"
-#readr::write_csv(metrics_overall_lme, file.path(output_dir, "lme_metrics_overall.csv"))
-#readr::write_csv(metrics_by_site_lme, file.path(output_dir, "lme_metrics_by_site.csv"))
-#readr::write_csv(fixed_effects_lme,  file.path(output_dir, "lme_fixed_effects.csv"))
+output_dir <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/results"
+readr::write_csv(metrics_overall_lme, file.path(output_dir, "lme_metrics_overall.csv"))
+readr::write_csv(metrics_by_site_lme, file.path(output_dir, "lme_metrics_by_site.csv"))
+readr::write_csv(fixed_effects_lme,  file.path(output_dir, "lme_fixed_effects.csv"))
 
 ```
 
