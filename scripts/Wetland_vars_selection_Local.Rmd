@@ -48,7 +48,7 @@ static_predictors <- c(
 )
 
 # Correlation threshold 
-cor_threshold <- 0.90
+cor_threshold <- 0.80
 ```
 
 *Fitting site-level lms to find best preds, removing collinear or near-zero-vars preds*
@@ -197,7 +197,7 @@ for (s in sites) {
 
 *double checking correlations*
 ```{r}
-check_corr <- function(df, resp, thr = 0.90) {
+check_corr <- function(df, resp, thr = cor_threshold) {
   ex <- c("Site","Datetime", resp)
   X  <- df %>% dplyr::select(-dplyr::any_of(ex)) %>% dplyr::select(where(is.numeric))
   if (ncol(X) < 2) return(list(ok = TRUE, pairs = tibble()))
@@ -213,7 +213,7 @@ check_corr <- function(df, resp, thr = 0.90) {
 bad_list <- list()
 for (s in names(site_response_data)) {
   for (resp in names(site_response_data[[s]])) {
-    res <- check_corr(site_response_data[[s]][[resp]], resp, thr = 0.90)
+    res <- check_corr(site_response_data[[s]][[resp]], resp, thr = cor_threshold)
     if (!res$ok) {
       bad_list[[length(bad_list)+1]] <- dplyr::bind_cols(
         tibble::tibble(Site = s, response = resp), res$pairs

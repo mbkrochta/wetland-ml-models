@@ -81,12 +81,14 @@ get_predictors <- function(df, response_col, mode = c("all","remote")) {
 
 *5-fold CV fxn*
 ```{r}
-# Weekly-blocked CV with automatic k based on available weeks
 make_weekly_folds <- function(df, k = 5, date_col = "Datetime") {
-  df <- df %>% mutate(.week = lubridate::floor_date(.data[[date_col]], unit = "week", week_start = 1))
+  # no dplyr mask needed; avoid .data
+  df$.week <- lubridate::floor_date(df[[date_col]], unit = "week", week_start = 1)
+
   weeks <- sort(unique(df$.week))
   k_eff <- min(k, length(weeks))
   if (k_eff < 2) stop(sprintf("Not enough unique weeks (%d) for CV (need >= 2).", length(weeks)))
+
   set.seed(42)
   weeks <- sample(weeks)
   folds <- split(weeks, cut(seq_along(weeks), breaks = k_eff, labels = FALSE))
@@ -112,20 +114,25 @@ nse   <- function(obs, pred) 1 - sum((obs - pred)^2, na.rm = TRUE) /
 
 compute_metrics <- function(pred_df, truth_col = "obs", pred_col = "pred", site_col = "Site") {
   overall <- tibble(
-    RMSE = RMSE_(pred_df[[pred_col]], pred_df[[truth_col]]),
-    MAE  = MAE_ (pred_df[[pred_col]], pred_df[[truth_col]]),
+    RMSE = sqrt(mean((pred_df[[pred_col]] - pred_df[[truth_col]])^2, na.rm = TRUE)),
+    MAE  = mean(abs(pred_df[[pred_col]] - pred_df[[truth_col]]), na.rm = TRUE),
     R2   = caret::R2(pred_df[[pred_col]], pred_df[[truth_col]]),
-    NSE  = nse  (pred_df[[truth_col]], pred_df[[pred_col]])
+    NSE  = 1 - sum((pred_df[[truth_col]] - pred_df[[pred_col]])^2, na.rm = TRUE) /
+              sum((pred_df[[truth_col]] - mean(pred_df[[truth_col]], na.rm = TRUE))^2, na.rm = TRUE)
   )
+
   by_site <- pred_df %>%
-    group_by(.data[[site_col]]) %>%
-    summarise(
-      RMSE = RMSE_(.data[[pred_col]], .data[[truth_col]]),
-      MAE  = MAE_ (.data[[pred_col]], .data[[truth_col]]),
+    dplyr::group_by(!!rlang::sym(site_col)) %>%
+    dplyr::summarise(
+      RMSE = sqrt(mean((.data[[pred_col]] - .data[[truth_col]])^2, na.rm = TRUE)),
+      MAE  = mean(abs(.data[[pred_col]] - .data[[truth_col]]), na.rm = TRUE),
       R2   = caret::R2(.data[[pred_col]], .data[[truth_col]]),
-      NSE  = nse  (.data[[truth_col]], .data[[pred_col]]),
+      NSE  = 1 - sum((.data[[truth_col]] - .data[[pred_col]])^2, na.rm = TRUE) /
+                sum((.data[[truth_col]] - mean(.data[[truth_col]], na.rm = TRUE))^2, na.rm = TRUE),
       .groups = "drop"
-    ) %>% rename(Site = .data[[site_col]])
+    )
+
+  names(by_site)[names(by_site) == site_col] <- "Site"
   list(overall = overall, by_site = by_site)
 }
 ```
@@ -194,25 +201,26 @@ train_model <- function(data,
   }
 
   # Train
-  form <- as.formula(paste(response, "~ ."))
-  train_df <- df %>% dplyr::select(all_of(c(response, predictors)))
 
-  set.seed(2025)
-  if (model_type == "rfr") {
-    fit <- train(
-      form, data = train_df, method = "ranger",
-      trControl = ctrl, tuneGrid = tune_grid, metric = "RMSE",
-      importance = "permutation",
-      num.trees = 500,
-      num.threads = 1     # avoid nested parallel
-    )
-  } else {
-    fit <- train(
-      form, data = train_df, method = "xgbTree",
-      trControl = ctrl, tuneGrid = tune_grid, metric = "RMSE",
-      nthread = 1         # avoid nested parallel
-    )
-  }
+form    <- as.formula(paste(response, "~ ."))
+train_df <- as.data.frame(df %>% dplyr::select(all_of(c(response, predictors))))
+
+set.seed(2025)
+if (model_type == "rfr") {
+  fit <- caret::train(
+    form, data = train_df, method = "ranger",
+    trControl = ctrl, tuneGrid = tune_grid, metric = "RMSE",
+    importance = "permutation",
+    num.trees = 500,
+    num.threads = 1
+  )
+} else {
+  fit <- caret::train(
+    form, data = train_df, method = "xgbTree",
+    trControl = ctrl, tuneGrid = tune_grid, metric = "RMSE",
+    nthread = 1
+  )
+}
 
   # Align OOF predictions back to Site/Date
   if (!"rowIndex" %in% names(fit$pred)) stop("caret did not return 'rowIndex' in fit$pred.")
@@ -474,9 +482,19 @@ edge_high_rfr <- function(row) {
 }
 
 master <- master %>%
-  rowwise() %>%
-  mutate(edge_high_core = if (Model == "XGB") edge_high_xgb(cur_data()) else edge_high_rfr(cur_data())) %>%
-  ungroup()
+  mutate(
+    mns = dplyr::coalesce(`min.node.size`, min.node.size),
+    edge_high_core = dplyr::if_else(
+      Model == "XGB",
+      # XGB edge: at top of nrounds or max_depth grid
+      dplyr::coalesce(nrounds == 800, FALSE) |
+        dplyr::coalesce(max_depth == 12, FALSE),
+      # RFR edge: large min.node.size or high mtry relative to n_pred
+      dplyr::coalesce(mns == 15, FALSE) |
+        (!is.na(mtry) & !is.na(n_pred) & mtry >= ceiling(0.75 * n_pred))
+    )
+  ) %>%
+  dplyr::select(!all_of("mns"))
 
 # Choose pass-2 targets (keep ALL runs; only refit flagged ones) 
 targets <- master %>%
@@ -485,8 +503,8 @@ targets <- master %>%
 
 # Preview (optional)
 targets %>%
-  select(Site, Metric, Set, Model, RMSE, NSE, edge_high_core, cv_instability, na_RMSE)
-message("Targets to refit: ", nrow(targets))
+  dplyr::select(Site, Metric, Set, Model, RMSE, NSE,
+                edge_high_core, cv_instability, na_RMSE)
 
 # Micro-grids: tweak only edges; keep other params fixed 
 expand_grid_xgb_min <- function(row){
@@ -645,22 +663,25 @@ if (nrow(pass2) == 0) {
   message("No pass-2 files found in: ", results_dir,
           "\nRun `run_pass2_targets(targets, execute = TRUE)` first, then re-run this compare.")
 } else {
-  base <- master %>% 
-    select(Site, Metric, Set, Model, RMSE, MAE, R2, NSE, n_resamples)
+  base <- master %>%
+    dplyr::select(dplyr::any_of(c(
+      "Site","Metric","Set","Model","RMSE","MAE","R2","NSE","n_resamples"
+    )))
 
   compare <- pass2 %>%
-    left_join(base, by = c("Site","Metric","Set","Model")) %>%
-    mutate(
+    dplyr::left_join(base, by = c("Site","Metric","Set","Model")) %>%
+    dplyr::mutate(
       dRMSE = RMSE_p2 - RMSE,   # negative = improvement
       dMAE  = MAE_p2  - MAE,
       dR2   = R2_p2   - R2,
       dNSE  = NSE_p2  - NSE
     ) %>%
-    arrange(Site, Metric, Set, Model)
+    dplyr::arrange(Site, Metric, Set, Model)
 
   readr::write_csv(compare, compare_out)
   message("Wrote comparison CSV: ", compare_out)
 }
+
 
 ```
 
@@ -689,8 +710,8 @@ keep_cols <- c("Site","Metric","Set","Model","RMSE","MAE","R2","NSE",
 present_cols <- intersect(keep_cols, names(orig))
 
 orig_slim <- orig %>%
-  select(any_of(present_cols)) %>%
-  mutate(k = 5L, source = "orig")
+  dplyr::select(dplyr::any_of(present_cols)) %>%
+  dplyr::mutate(k = 5L, source = "orig")
 
 # Collect pass-2 results from RDS 
 collect_pass2 <- function(dir) {
@@ -765,27 +786,18 @@ if (nrow(p2) == 0) {
 } else {
   keys <- c("Site","Metric","Set","Model")
 
-  # originals that DO NOT have a pass-2 counterpart
+  # originals that do NOT have a pass-2 counterpart
   orig_only <- orig_slim %>%
-    anti_join(p2 %>% select(all_of(keys)), by = keys)
+    dplyr::anti_join(p2 %>% dplyr::select(dplyr::all_of(keys)), by = keys)
 
-  # union with pass-2 rows
-  # (both have the same column set except possibly missing some param cols)
-  all_cols <- union(names(orig_only), names(p2))
-  orig_only <- orig_only %>% mutate(across(setdiff(all_cols, names(.)), ~NA))
-  p2        <- p2        %>% mutate(across(setdiff(all_cols, names(.)), ~NA))
-
-  final <- bind_rows(orig_only[, all_cols], p2[, all_cols]) %>%
-    arrange(Site, Metric, Set, Model)
+  # union with pass-2 rows, sorted
+  final <- dplyr::bind_rows(orig_only, p2) %>%
+    dplyr::arrange(Site, Metric, Set, Model)
 }
 
 # Save final table 
 readr::write_csv(final, FINAL_OUT)
 message("Wrote final models table: ", FINAL_OUT)
-
-# Optional: quick peek at how many came from pass-2
-final %>% count(source)
-
 ```
 
 
@@ -799,6 +811,9 @@ library(tidyr)
 library(purrr)
 library(lubridate)
 library(tibble)
+
+# ---- small helper for null coalescing ----
+`%||%` <- function(a, b) if (is.null(a)) b else a
 
 # Remote-only exclusion 
 remote_exclude_exact <- c(
@@ -903,6 +918,7 @@ vif_prune <- function(train_df, response, preds, thresh = 5) {
 }
 
 # alias-tolerant VIF (logging helper) 
+# Safe VIF that returns tibble(predictor, vif)
 safe_vif_long <- function(df, response, preds) {
   preds <- unique(preds)
   preds <- preds[!is.na(preds) & preds %in% names(df)]
@@ -910,77 +926,99 @@ safe_vif_long <- function(df, response, preds) {
     return(tibble::tibble(predictor = character(0), vif = numeric(0)))
   }
 
-  fm  <- as.formula(paste(response, "~", paste(preds, collapse = "+")))
+  # keep only numeric, non-constant
+  is_num <- vapply(preds, function(v) is.numeric(df[[v]]), logical(1))
+  preds  <- preds[is_num]
+  if (length(preds) == 0L) return(tibble::tibble(predictor = character(0), vif = numeric(0)))
+
+  nonconst <- vapply(preds, function(v) stats::var(df[[v]], na.rm = TRUE) > 0, logical(1))
+  preds    <- preds[nonconst]
+  if (length(preds) == 0L) return(tibble::tibble(predictor = character(0), vif = numeric(0)))
+
+  # fit and handle aliasing
+  fm  <- stats::as.formula(paste(response, "~", paste(preds, collapse = "+")))
   fit <- try(stats::lm(fm, data = df), silent = TRUE)
   if (inherits(fit, "try-error")) {
     return(tibble::tibble(predictor = preds, vif = NA_real_))
   }
 
-  # drop aliased (non-estimable) predictors
-  aliased   <- names(coef(fit))[is.na(coef(fit))]
-  aliased   <- intersect(aliased, preds)
+  aliased   <- intersect(names(coef(fit))[is.na(coef(fit))], preds)
   estimable <- setdiff(preds, aliased)
 
-  vif_vec <- setNames(rep(NA_real_, length(preds)), preds)
+  out_names <- preds
+  out_vals  <- rep(NA_real_, length(out_names))
+  names(out_vals) <- out_names
 
-  if (length(estimable) >= 1) {
-    if (length(estimable) == 1) {
-      vif_est <- setNames(1, estimable)              # VIF = 1 for single predictor
-    } else {
-      fm_est  <- as.formula(paste(response, "~", paste(estimable, collapse = "+")))
-      fit_est <- stats::lm(fm_est, data = df)
-      v <- suppressWarnings(car::vif(fit_est))
-      if (is.matrix(v)) v <- diag(v)
-      vif_est <- setNames(as.numeric(v), names(v))
+  if (length(estimable) == 1L) {
+    out_vals[estimable] <- 1
+  } else if (length(estimable) > 1L) {
+    fm2  <- stats::as.formula(paste(response, "~", paste(estimable, collapse = "+")))
+    fit2 <- try(stats::lm(fm2, data = df), silent = TRUE)
+    if (!inherits(fit2, "try-error")) {
+      v <- try(suppressWarnings(car::vif(fit2)), silent = TRUE)
+      if (!inherits(v, "try-error")) {
+        if (is.matrix(v)) v <- diag(v)
+        v <- as.numeric(v); names(v) <- names(car::vif(fit2))
+        out_vals[names(v)] <- v
+      }
     }
-    vif_vec[names(vif_est)] <- unname(vif_est)
   }
 
-  tibble::tibble(predictor = names(vif_vec), vif = as.numeric(vif_vec))
+  tibble::tibble(predictor = names(out_vals), vif = unname(out_vals))
 }
 
-# For each dropped var, find the kept var with the largest |Pearson r|
+# Most-correlated kept partner for each dropped var (no across, no summarise)
 most_corr_partner_local <- function(df, dropped_vars, kept_vars, response_col, method = "pearson") {
-  dropped_vars <- intersect(dropped_vars, names(df))
-  kept_vars    <- intersect(kept_vars,    names(df))
-  if (length(dropped_vars) == 0 || length(kept_vars) == 0) {
+  dropped_vars <- intersect(dropped_vars %||% character(0), names(df))
+  kept_vars    <- intersect(kept_vars    %||% character(0), names(df))
+  if (!length(dropped_vars) || !length(kept_vars)) {
     return(tibble::tibble(predictor = character(), partner = character(), r = numeric()))
   }
 
-  # numeric-only from union (exclude response)
-  union_vars <- setdiff(unique(c(dropped_vars, kept_vars)), response_col)
-  num_df <- df %>%
-    dplyr::select(dplyr::any_of(union_vars)) %>%
-    dplyr::mutate(dplyr::across(dplyr::everything(), ~ suppressWarnings(as.numeric(.)))) %>%
-    dplyr::select(where(is.numeric))
-
-  # drop <3 finite or zero-variance
-  keep_cols <- num_df %>%
-    summarise(across(everything(), ~{
-      v <- .x[is.finite(.x)]
-      (length(v) >= 3) && stats::sd(v) > 0
-    })) %>% as.list() %>% unlist()
-  num_df <- num_df[, keep_cols, drop = FALSE]
-  if (ncol(num_df) == 0) {
+  # numeric-only columns from union, exclude response
+  cols <- setdiff(unique(c(dropped_vars, kept_vars)), response_col)
+  if (!length(cols)) {
     return(tibble::tibble(predictor = character(), partner = character(), r = numeric()))
   }
 
-  left  <- intersect(dropped_vars, colnames(num_df))
-  right <- intersect(kept_vars,    colnames(num_df))
-  if (length(left) == 0 || length(right) == 0) {
+  num_df <- df[cols]
+  for (nm in names(num_df)) if (!is.numeric(num_df[[nm]])) {
+    num_df[[nm]] <- suppressWarnings(as.numeric(num_df[[nm]]))
+  }
+  num_df <- num_df[vapply(num_df, is.numeric, logical(1))]
+
+  if (!length(num_df)) {
     return(tibble::tibble(predictor = character(), partner = character(), r = numeric()))
   }
 
-  cors <- suppressWarnings(cor(num_df[, left,  drop = FALSE],
-                               num_df[, right, drop = FALSE],
-                               use = "pairwise.complete.obs",
-                               method = method))
-  if (!is.matrix(cors)) cors <- as.matrix(cors)
-  if (length(left) == 1 && length(right) > 1) cors <- t(cors)
+  # keep columns with >= 3 finite and nonzero sd
+  ok <- vapply(num_df, function(x) {
+    z <- x[is.finite(x)]
+    length(z) >= 3 && stats::sd(z) > 0
+  }, logical(1))
+  num_df <- num_df[ok]
+  if (!length(num_df)) {
+    return(tibble::tibble(predictor = character(), partner = character(), r = numeric()))
+  }
+
+  left  <- intersect(dropped_vars, names(num_df))
+  right <- intersect(kept_vars,    names(num_df))
+  if (!length(left) || !length(right)) {
+    return(tibble::tibble(predictor = character(), partner = character(), r = numeric()))
+  }
+
+  cors <- suppressWarnings(stats::cor(
+    as.matrix(num_df[left]),
+    as.matrix(num_df[right]),
+    use = "pairwise.complete.obs",
+    method = method
+  ))
+  cors <- as.matrix(cors)
+  if (length(left) == 1L && length(right) > 1L) cors <- t(cors)
 
   purrr::map_dfr(seq_along(left), function(i) {
     rvec <- cors[i, ]
-    if (length(rvec) == 0 || all(is.na(rvec))) {
+    if (!length(rvec) || all(is.na(rvec))) {
       tibble::tibble(predictor = left[i], partner = NA_character_, r = NA_real_)
     } else {
       j <- which.max(abs(rvec))
@@ -988,8 +1026,6 @@ most_corr_partner_local <- function(df, dropped_vars, kept_vars, response_col, m
     }
   })
 }
-
-
 
 ```
 
@@ -1230,30 +1266,41 @@ vif_log_local_lme <- purrr::imap_dfr(local_lme_results, function(res, model_id) 
 
   vb <- safe_vif_long(res$full_data, res$response, res$predictors_init) %>%
         dplyr::mutate(stage = "before")
-  va <- safe_vif_long(res$full_data, res$response, res$kept_full) %>%
+  va <- safe_vif_long(res$full_data, res$response, res$kept_full %||% character(0)) %>%
         dplyr::mutate(stage = "after")
+
+  dropped_vec <- setdiff(res$predictors_init %||% character(0),
+                         res$kept_full       %||% character(0))
+
   vd <- vb %>%
-        dplyr::filter(predictor %in% res$dropped_full) %>%
+        dplyr::filter(.data$predictor %in% dropped_vec) %>%
         dplyr::mutate(stage = "dropped")
 
-  # Add partner + r for DROPPED vs KEPT
   corr_partners <- most_corr_partner_local(
     df = res$full_data,
-    dropped_vars = res$dropped_full,
-    kept_vars    = res$kept_full,
+    dropped_vars = dropped_vec,
+    kept_vars    = res$kept_full %||% character(0),
     response_col = res$response,
     method = "pearson"
   )
 
   vd <- vd %>%
-    dplyr::left_join(corr_partners, by = "predictor") %>%
-    { if (!"partner" %in% names(.)) dplyr::mutate(., partner = NA_character_) else . } %>%
-    { if (!"r" %in% names(.))       dplyr::mutate(., r = NA_real_)       else . } %>%
-    dplyr::rename(partner_most_corr = partner, r_with_partner = r)
+  dplyr::left_join(corr_partners, by = "predictor") %>%
+  { if (!"partner" %in% names(.)) dplyr::mutate(., partner = NA_character_) else . } %>%
+  { if (!"r" %in% names(.))       dplyr::mutate(., r = NA_real_)         else . } %>%
+  dplyr::mutate(
+    partner = dplyr::coalesce(partner, NA_character_),
+    r       = dplyr::coalesce(r, NA_real_)
+  ) %>%
+  dplyr::rename(partner_most_corr = partner, r_with_partner = r)
+
 
   dplyr::bind_rows(vb, va, vd) %>%
-    dplyr::mutate(Site = Site, Metric = Metric, Set = Set, alg = "gls_ar1",
-                  dropped = stage == "dropped") %>%
+    dplyr::mutate(
+      Site = Site, Metric = Metric, Set = Set,
+      alg = "gls_ar1",
+      dropped = .data$stage == "dropped"
+    ) %>%
     dplyr::select(Site, Metric, Set, alg, stage, predictor, vif,
                   partner_most_corr, r_with_partner, dropped)
 }, .id = NULL)
@@ -1271,6 +1318,8 @@ readr::write_csv(
 # Permutation VI for ALL FINAL LOCAL MODELS
 # (XGB, RFR, GLS/AR1) -> one consolidated CSV
 library(vip)
+# NEW: add iml for CPI
+library(iml)
 
 set.seed(42)
 options(vip.smaller_is_better = TRUE)
@@ -1288,6 +1337,56 @@ dir.create(OUT_DIR, recursive = TRUE, showWarnings = FALSE)
 rmse_loss <- function(truth, estimate) sqrt(mean((truth - estimate)^2, na.rm = TRUE))
 pred_wrap_caret <- function(object, newdata) predict(object, newdata = newdata)
 pred_wrap_gls   <- function(object, newdata) predict(object, newdata = newdata)
+
+# NEW: light guard in case compute_cpi_tbl() isn't already in the env
+# replace the whole compute_cpi_tbl() helper with this
+if (!exists("compute_cpi_tbl")) {
+  compute_cpi_tbl <- function(object, train_x, train_y, pred_fun, nsim = 20, ...) {
+    # Defensive: ensure numeric/data.frame and drop rows with NA used by iml
+    X <- as.data.frame(train_x)
+    # try to coerce non-numeric columns to numeric if possible
+    for (nm in names(X)) {
+      if (!is.numeric(X[[nm]])) {
+        suppressWarnings({
+          asnum <- as.numeric(X[[nm]])
+          if (sum(is.finite(asnum)) >= sum(is.finite(X[[nm]]))) X[[nm]] <- asnum
+        })
+      }
+    }
+    ok <- is.finite(train_y)
+    if (any(!ok)) {
+      X <- X[ok, , drop = FALSE]
+      train_y <- train_y[ok]
+    }
+
+    pred <- iml::Predictor$new(
+      model = object,
+      data  = X,
+      y     = train_y,
+      predict.function = function(m, newdata) pred_fun(m, newdata)
+    )
+
+    args <- list(
+      pred,
+      loss          = function(obs, hat) sqrt(mean((obs - hat)^2)),  # <-- use function, not "rmse"
+      compare       = "difference",
+      n.repetitions = nsim
+    )
+    if ("conditional" %in% names(formals(iml::FeatureImp$new))) {
+      args$conditional <- TRUE
+    }
+
+    set.seed(42)  # reproducible permutations per call
+    fi  <- do.call(iml::FeatureImp$new, args)
+    out <- as.data.frame(fi$results)
+
+    tibble::tibble(
+      Variable   = out$feature,
+      Importance = out$importance,
+      Stderr     = NA_real_
+    )
+  }
+}
 
 # Final model selection (ML rows only)
 final_ml <- readr::read_csv(FINAL_CSV, show_col_types = FALSE) %>%
@@ -1370,7 +1469,6 @@ vi_ml_perm <- purrr::pmap_dfr(
   }
 )
 
-
 # Permutation VI for GLS (AR1) local models
 vi_gls_perm <- {
   if (file.exists(GLS_RDS)) {
@@ -1416,16 +1514,99 @@ vi_gls_perm <- {
   }
 }
 
+# NEW: CPI for FINAL ML models (XGB/RFR)
+vi_ml_cpi <- purrr::pmap_dfr(
+  final_ml %>% dplyr::select(Site, Metric, Set, Model, source),
+  function(Site, Metric, Set, Model, source) {
+    res <- load_final_ml_model(Site, Metric, Set, Model, source)
+    preds <- res$predictors
+    if (is.null(preds) || !length(preds)) return(tibble())
+    tr <- build_train_xy(Site, Metric, preds)
 
-# Consolidate (ALL models) and write ONE file
+    vi <- compute_cpi_tbl(
+      object   = res$fit_object,
+      train_x  = tr$X,
+      train_y  = tr$y,
+      pred_fun = pred_wrap_caret,
+      nsim     = NSIMS
+    )
+
+    tibble(
+      Site = Site, Metric = Metric, Set = Set,
+      Model = toupper(Model), source = tolower(source),
+      Variable   = vi$Variable,
+      Importance = vi$Importance,
+      Stderr     = vi$Stderr,
+      nsim       = NSIMS,
+      type       = "cpi"
+    )
+  }
+)
+
+# NEW: CPI for GLS (AR1) local models
+vi_gls_cpi <- {
+  if (file.exists(GLS_RDS)) {
+    gls_list <- readRDS(GLS_RDS)
+    purrr::imap_dfr(gls_list, function(res, key){
+      parts <- strsplit(key, "_", fixed = TRUE)[[1]]
+      Site <- parts[1]; Metric <- parts[2]; Set <- parts[3]
+      kept <- res$kept_full
+      if (is.null(kept) || !length(kept)) return(tibble())
+
+      df <- res$full_data
+      response <- res$response
+      combo <- df %>% dplyr::select(dplyr::all_of(c(response, kept))) %>% tidyr::drop_na()
+      y <- combo[[response]]
+      X <- combo %>% dplyr::select(dplyr::all_of(kept))
+
+      vi <- compute_cpi_tbl(
+        object   = res$fit_object,
+        train_x  = X,
+        train_y  = y,
+        pred_fun = pred_wrap_gls,
+        nsim     = NSIMS
+      )
+
+      tibble(
+        Site = Site, Metric = Metric, Set = Set,
+        Model = "GLS", source = "gls",
+        Variable   = vi$Variable,
+        Importance = vi$Importance,
+        Stderr     = vi$Stderr,
+        nsim       = NSIMS,
+        type       = "cpi"
+      )
+    })
+  } else {
+    tibble()
+  }
+}
+
+# Consolidate (ALL models) and write ONE file (Permutation only = original behavior)
 varimp_perm_local_ALL_final <- bind_rows(vi_ml_perm, vi_gls_perm) %>%
   arrange(Site, Metric, Set, Model, desc(Importance))
 
 OUT_FILE <- file.path(OUT_DIR, "varimp_perm_local_ALL_final.csv")
 readr::write_csv(varimp_perm_local_ALL_final, OUT_FILE)
+message("Wrote: ", OUT_FILE, "\nRows: ", nrow(varimp_perm_local_ALL_final))
 
-message("Wrote: ", OUT_FILE,
-        "\nRows: ", nrow(varimp_perm_local_ALL_final))
+# NEW: Write CPI-only and merged CPI+Permutation
+varimp_cpi_local_ALL_final <- bind_rows(vi_ml_cpi, vi_gls_cpi) %>%
+  arrange(Site, Metric, Set, Model, desc(Importance))
+
+OUT_FILE_CPI <- file.path(OUT_DIR, "varimp_cpi_local_ALL_final.csv")
+readr::write_csv(varimp_cpi_local_ALL_final, OUT_FILE_CPI)
+message("Wrote: ", OUT_FILE_CPI, "\nRows: ", nrow(varimp_cpi_local_ALL_final))
+
+varimp_perm_cpi_local_ALL_final <- bind_rows(
+  varimp_perm_local_ALL_final %>% mutate(kind = "permutation"),
+  varimp_cpi_local_ALL_final   %>% mutate(kind = "cpi")
+) %>% arrange(Site, Metric, Set, Model, desc(Importance))
+
+OUT_FILE_MERGED <- file.path(OUT_DIR, "varimp_perm_plus_cpi_local_ALL_final.csv")
+readr::write_csv(varimp_perm_cpi_local_ALL_final, OUT_FILE_MERGED)
+message("Wrote: ", OUT_FILE_MERGED, "\nRows: ", nrow(varimp_perm_cpi_local_ALL_final))
+
 ```
 
 *Variable importance plots*
@@ -1434,15 +1615,16 @@ library(forcats)
 library(stringr)
 library(ggh4x)
 
-vi_file    <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/results/local_results/varimp_perm_local_ALL_final.csv"  # <-- set to your file
+# use CPI output
+vi_file    <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/results/local_results/varimp_cpi_local_ALL_final.csv"
 output_dir <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/figures"
 
 # Load & prep
 vi_raw <- readr::read_csv(vi_file, show_col_types = FALSE)
 
 vi <- vi_raw %>%
-  filter(Set == "A") %>%
-  mutate(
+  dplyr::filter(Set == "A") %>%
+  dplyr::mutate(
     alg = dplyr::case_when(
       Model == "GLS" ~ "GLS",
       Model == "RFR" ~ "RFR",
@@ -1458,7 +1640,8 @@ vi <- vi_raw %>%
     alg = factor(alg, levels = c("GLS","RFR","XGB")),
     response = factor(response, levels = c("Max","Mean","Range"))
   ) %>%
-  select(Site, response, alg, Variable, Importance, Stderr)
+  dplyr::select(Site, response, alg, Variable, Importance, Stderr)
+
 
 # Build list of vars (per Site × response) dropped by GLS VIF in Set A
 if (exists("vif_log_local_lme")) {
@@ -1478,37 +1661,40 @@ dropped_local_A <- vif_local %>%
   ) %>%
   dplyr::distinct(Site, var_key)
 
+
+library(ggplot2)
+
 # SITE-SPECIFIC mini-global plot 
 make_site_plot <- function(site_name, top_k = 12, clamp_LME = FALSE) {
 
   # 1) choose top-k variables *within this site x response* (mean across algs)
   site_top <- vi %>%
-    filter(Site == site_name) %>%
-    group_by(response, Variable) %>%
-    summarise(mean_imp = mean(Importance, na.rm = TRUE), .groups = "drop") %>%
-    filter(!is.na(mean_imp)) %>%
-    group_by(response) %>%
-    slice_max(order_by = mean_imp, n = top_k, with_ties = FALSE) %>%
-    arrange(response, desc(mean_imp)) %>%
-    mutate(var_key = paste0(response, "__", Variable)) %>%
-    ungroup()
+    dplyr::filter(Site == site_name) %>%
+    dplyr::group_by(response, Variable) %>%
+    dplyr::summarise(mean_imp = mean(Importance, na.rm = TRUE), .groups = "drop") %>%
+    dplyr::filter(!is.na(mean_imp)) %>%
+    dplyr::group_by(response) %>%
+    dplyr::slice_max(order_by = mean_imp, n = top_k, with_ties = FALSE) %>%
+    dplyr::arrange(response, dplyr::desc(mean_imp)) %>%
+    dplyr::mutate(var_key = paste0(response, "__", Variable)) %>%
+    dplyr::ungroup()
 
   # 2) build plotting frame for this site using its own top-k order
   plot_df <- vi %>%
-    filter(Site == site_name) %>%
-    mutate(
+    dplyr::filter(Site == site_name) %>%
+    dplyr::mutate(
       var_key = paste0(response, "__", Variable),
-      Importance = dplyr::coalesce(Importance, 0)  # show 0 if a model didn't produce VI
+      Importance = dplyr::coalesce(Importance, 0)
     ) %>%
-    inner_join(site_top, by = c("response","Variable","var_key"))
-  
+    dplyr::inner_join(site_top, by = c("response","Variable","var_key"))
+
   dropped_site <- dropped_local_A %>% dplyr::filter(Site == site_name)
 
   label_map <- plot_df %>%
     dplyr::distinct(var_key) %>%
     dplyr::mutate(
       lbl = ifelse(var_key %in% dropped_site$var_key,
-                   paste0(sub("^.*__", "", var_key), "*"),
+                   paste0(sub("^.*__", "", var_key), "\u02E3"),
                    sub("^.*__", "", var_key))
     ) %>%
     { setNames(.$lbl, .$var_key) }
@@ -1523,9 +1709,9 @@ make_site_plot <- function(site_name, top_k = 12, clamp_LME = FALSE) {
     facet_grid(response ~ alg, scales = "free_y", space = "free_y") +
     scale_x_discrete(labels = label_map) +
     labs(
-      title = paste0("Local variable importance — ", site_name),
+      title = paste0("Local conditional permutation importance — ", site_name),
       x = "Predictor",
-      y = "Increase in RMSE (°C)"
+      y = "Importance (ΔRMSE)"
     ) +
     theme_minimal(base_size = 11) +
     theme(
@@ -1539,14 +1725,18 @@ make_site_plot <- function(site_name, top_k = 12, clamp_LME = FALSE) {
 
   if (clamp_LME) {
     p <- p + ggh4x::facetted_pos_scales(
-      y = list(alg == "LME" ~ scale_y_continuous(limits = c(0, 1)))
+      y = list(alg == "GLS" ~ scale_y_continuous(limits = c(0, 1)))
     )
   }
-  p
+
+  return(p)
 }
 
-# make & save all sites
-sites <- vi %>% distinct(Site) %>% arrange(Site) %>% pull(Site)
+# make & save all sites (outside the function)
+dir.create("C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/figures/varimp_local",
+           recursive = TRUE, showWarnings = FALSE)
+
+sites <- vi %>% dplyr::distinct(Site) %>% dplyr::arrange(Site) %>% dplyr::pull(Site)
 
 purrr::walk(sites, function(s) {
   p <- make_site_plot(s, top_k = 12, clamp_LME = FALSE)
@@ -1565,48 +1755,78 @@ purrr::walk(sites, function(s) {
 resp_lab <- c(max = "Max WT", mean = "Mean WT", range = "Range WT")
 alg_lab  <- c(lme = "GLS",    rfr  = "RFR",     xgb   = "XGB")
 
-# 1) Collect Set A OOF predictions from your local objects
+# 1) Collect Set A OOF predictions from your local objects (ML + GLS)
 collect_local_oof_setA <- function(local_results_refined, local_lme_results) {
-  # RFR/XGB
+
+  # --- RFR/XGB (keys like "<Site>_<metric>_<Set>_<model>")
   df_ml <- purrr::imap_dfr(local_results_refined, function(x, nm){
-    parts <- strsplit(nm, "_", fixed = TRUE)[[1]]  # <Site>_<metric>_<Set>_<model>
+    parts <- strsplit(nm, "_", fixed = TRUE)[[1]]
+    # expect 4 parts and Set == "A"
     if (length(parts) != 4L || parts[3] != "A") return(NULL)
-    tibble(
+    tibble::tibble(
       Site     = parts[1],
-      response = parts[2],       # max / mean / range
-      set      = parts[3],       # A
-      alg      = parts[4],       # rfr / xgb
+      response = parts[2],   # "max" / "mean" / "range"
+      set      = parts[3],   # "A"
+      alg      = parts[4],   # "rfr" / "xgb"
       Date     = x$oof_predictions$Date,
       obs      = x$oof_predictions$obs,
       pred     = x$oof_predictions$pred
     )
   })
 
-  # GLS (normalize to alg="lme")
+  # --- GLS (keys like "<Site>_<metric>_<Set>_gls")
   df_gls <- purrr::imap_dfr(local_lme_results, function(x, nm){
-    parts <- strsplit(nm, "_", fixed = TRUE)[[1]]  # <Site>_<metric>_<Set>_gls
+    parts <- strsplit(nm, "_", fixed = TRUE)[[1]]
     if (length(parts) != 4L || parts[3] != "A") return(NULL)
-    tibble(
+    tibble::tibble(
       Site     = parts[1],
       response = parts[2],
       set      = parts[3],
-      alg      = "lme",
+      alg      = "lme",      # normalize to "lme" so labels map to "GLS"
       Date     = x$oof_predictions$Date,
       obs      = x$oof_predictions$obs,
       pred     = x$oof_predictions$pred
     )
   })
 
-  bind_rows(df_ml, df_gls) %>%
-    mutate(
+  dplyr::bind_rows(df_ml, df_gls) %>%
+    dplyr::mutate(
       response = factor(response, levels = c("max","mean","range"), labels = resp_lab),
       alg      = factor(alg,      levels = c("lme","rfr","xgb"),    labels = alg_lab)
     ) %>%
-    arrange(response, alg, Site, Date)
+    dplyr::arrange(response, alg, Site, Date)
 }
 
 # Build OOF df (requires local_results_refined + local_lme_results in env)
 oof_local_A <- collect_local_oof_setA(local_results_refined, local_lme_results)
+
+standardize_oof_names <- function(df) {
+  pick1 <- function(x, choices) {
+    hit <- intersect(choices, names(x))
+    if (length(hit)) x[[hit[1]]] else NULL
+  }
+  out <- df
+  out$Site <- pick1(df, c("Site","site","SITE"))
+  out$Date <- pick1(df, c("Date","date","DATE"))
+  out$obs  <- pick1(df, c("obs","Obs","OBS","y","truth"))
+  out$pred <- pick1(df, c("pred","Pred","PRED","yhat","prediction"))
+
+  # if any are still NULL, create empty
+  if (is.null(out$Site)) out$Site <- NA_character_
+  if (is.null(out$Date)) out$Date <- as.Date(NA)
+  if (is.null(out$obs))  out$obs  <- NA_real_
+  if (is.null(out$pred)) out$pred <- NA_real_
+
+  # ensure types
+  out$Site <- as.character(out$Site)
+  out
+}
+
+
+# Bail early if nothing to plot
+if (is.null(oof_local_A) || nrow(oof_local_A) == 0) {
+  stop("No Set A OOF predictions found in local_results_refined / local_lme_results.")
+}
 
 # 2) Helpers for scales/metrics
 int_breaks <- function(lims, target = 6L) {
@@ -1618,66 +1838,92 @@ int_breaks <- function(lims, target = 6L) {
 
 limits_by_response <- function(df) {
   df %>%
-    group_by(response) %>%
-    summarise(
+    dplyr::group_by(response) %>%
+    dplyr::summarise(
       lo = floor(min(c(obs, pred), na.rm = TRUE)),
       hi = ceiling(max(c(obs, pred), na.rm = TRUE)),
       .groups = "drop"
     )
 }
 
+safe_slope <- function(dat) {
+  # robust slope: NA if not enough unique obs or any failure
+  if (!all(c("obs","pred") %in% names(dat))) return(NA_real_)
+  if (sum(is.finite(dat$obs) & is.finite(dat$pred)) < 3) return(NA_real_)
+  fit <- try(stats::lm(pred ~ obs, data = dat), silent = TRUE)
+  if (inherits(fit, "try-error")) return(NA_real_)
+  as.numeric(coef(fit)[2])
+}
+
+safe_rmse <- function(dat) {
+  if (!all(c("obs","pred") %in% names(dat))) return(NA_real_)
+  v <- with(dat, (pred - obs)^2)
+  v <- v[is.finite(v)]
+  if (!length(v)) return(NA_real_)
+  sqrt(mean(v))
+}
+
 # 3) Main plotting function: one figure per response (rows=models, cols=sites)
 make_response_grid <- function(dat, resp_label, site_order = NULL, show_metrics = TRUE) {
-  dd <- dat %>% filter(response == resp_label)
+  dd <- dat %>% dplyr::filter(response == resp_label)
 
-  # order sites (alphabetical by default)
   if (is.null(site_order)) {
-    site_order <- dd %>% distinct(Site) %>% arrange(Site) %>% pull(Site)
+    site_order <- dd %>% dplyr::distinct(Site) %>% dplyr::arrange(Site) %>% dplyr::pull(Site)
   }
 
-  # common limits/breaks for this response
+  # ensure concrete factors for faceting (and drop empties)
+  dd <- dd %>%
+    dplyr::mutate(
+      Site = factor(Site, levels = site_order),
+      alg  = factor(alg, levels = c("GLS","RFR","XGB"))
+    ) %>% 
+    droplevels()
+
+  # shared limits/breaks for this response
   lim_tbl <- limits_by_response(dd)
-  lim_row <- lim_tbl %>% filter(response == resp_label)
+  lim_row <- lim_tbl %>% dplyr::filter(response == resp_label)
   lims <- c(lim_row$lo, lim_row$hi)
   brk  <- int_breaks(lims, target = 6L)
 
-  # per-panel metrics (Site x alg for this response)
+  # per-panel metrics
   mets <- dd %>%
-    group_by(Site, alg) %>%
+    dplyr::group_by(Site, alg) %>%
     tidyr::nest() %>%
-    mutate(
-      slope = purrr::map_dbl(data, ~ coef(lm(pred ~ obs, data = .x))[2]),
-      rmse  = purrr::map_dbl(data, ~ sqrt(mean((.x$pred - .x$obs)^2, na.rm = TRUE)))
+    dplyr::mutate(
+      slope = purrr::map_dbl(data, safe_slope),
+      rmse  = purrr::map_dbl(data, safe_rmse)
     ) %>%
-    select(-data)
+    dplyr::select(-data) %>%
+    dplyr::mutate(
+      Site = factor(Site, levels = levels(dd$Site)),
+      alg  = factor(alg,  levels = levels(dd$alg))
+    )
 
-  # annotation position (top-left of each panel)
   ann_y <- lims[2] - (diff(lims) * 0.05)
   ann_x <- lims[1] + (diff(lims) * 0.03)
 
-  ggplot(
-    dd %>% mutate(Site = factor(Site, levels = site_order)),
-    aes(obs, pred)
-  ) +
+  ggplot(dd, aes(x = obs, y = pred)) +
     geom_point(alpha = 0.65, size = 1.6, stroke = 0.25) +
     geom_abline(slope = 1, intercept = 0, linetype = "dashed", linewidth = 0.7) +
     geom_smooth(method = "lm", se = FALSE, linewidth = 0.9) +
-    { if (show_metrics)
+    {
+      if (show_metrics)
         geom_text(
-          data = mets %>% mutate(Site = factor(Site, levels = site_order)),
+          data = mets,
           aes(x = ann_x, y = ann_y,
               label = sprintf("slope=%.2f\nRMSE=%.2f", slope, rmse)),
           hjust = 0, vjust = 1, size = 3, inherit.aes = FALSE
         )
     } +
-    facet_grid(rows = vars(alg), cols = vars(Site)) +
+    # use the formula faceting (more backward-compatible than vars())
+    facet_grid(alg ~ Site) +
     coord_equal(ratio = 1) +
     scale_x_continuous(limits = lims, breaks = brk, minor_breaks = NULL,
                        labels = scales::label_number(accuracy = 1)) +
     scale_y_continuous(limits = lims, breaks = brk, minor_breaks = NULL,
                        labels = scales::label_number(accuracy = 1)) +
     labs(
-      title = paste0("Observed vs Predicted — ", resp_label),
+      title = paste0("Observed vs Predicted - ", resp_label),
       x = "Observed (°C)",
       y = "Predicted (°C)"
     ) +

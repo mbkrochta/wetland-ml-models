@@ -28,6 +28,11 @@ library(patchwork)
 library(ggh4x)
 
 set.seed(42)        # Reproducibility for folds/shuffles
+
+glob_rds_path <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/results/global_results/results_refined.rds"
+lme_rds_path  <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/results/global_results/results_lme.rds"
+dir.create(dirname(glob_rds_path), recursive = TRUE, showWarnings = FALSE)
+
 ```
 
 **Loading data**
@@ -342,6 +347,7 @@ cl <- makeCluster(parallel::detectCores() - 1)
 registerDoParallel(cl)
 
 results_refined <- run_all()
+saveRDS(results_refined, glob_rds_path)
 
 stopCluster(cl)
 ```
@@ -730,6 +736,7 @@ run_all_lme <- function(k = 5, vif_thresh = 5) {
 ```{r}
 # Run
 results_lme <- run_all_lme(k = 5, vif_thresh = 5)
+saveRDS(results_lme, lme_rds_path)
 
 # Overall metrics table
 metrics_overall_lme <- purrr::imap_dfr(results_lme, ~ .x$metrics_overall, .id = "model_id") %>%
@@ -841,10 +848,43 @@ readr::write_csv(
   vif_log_long,
   file.path(output_dir, "lme_vif_log_long.csv")
 )
-
-
-
 ```
+
+*CPI setup*
+```{r}
+library(iml)
+
+compute_cpi_tbl <- function(object, train_x, train_y, pred_fun, nsim = 20, ...) {
+  pred <- iml::Predictor$new(
+    model = object,
+    data  = train_x,
+    y     = train_y,
+    predict.function = function(m, newdata) pred_fun(m, newdata)
+  )
+
+  args <- list(
+    pred,
+    loss          = "rmse",
+    compare       = "difference",
+    n.repetitions = nsim
+  )
+
+  # Use conditional perm only if this iml version supports it
+  if ("conditional" %in% names(formals(iml::FeatureImp$new))) {
+    args$conditional <- TRUE
+  }
+
+  fi  <- do.call(iml::FeatureImp$new, args)
+  out <- as.data.frame(fi$results)
+
+  tibble::tibble(
+    Variable   = out$feature,
+    Importance = out$importance,
+    Stderr     = NA_real_
+  )
+}
+```
+
 
 *Comparing variable importances across all models*
 ```{r}
@@ -880,7 +920,7 @@ get_train_frame <- function(model_id) {
 set.seed(42)
 
 # Permutation importance for ML models (caret: XGB/RFR) 
-perm_vi_ml <- purrr::imap_dfr(results_refined, function(res, model_id) {
+cpi_vi_ml <- purrr::imap_dfr(results_refined, function(res, model_id) {
   td <- get_train_frame(model_id)
   combo <- td$df %>%
     dplyr::select(dplyr::all_of(c(td$response, td$predictors))) %>%
@@ -888,78 +928,69 @@ perm_vi_ml <- purrr::imap_dfr(results_refined, function(res, model_id) {
   train_y <- combo[[td$response]]
   train_x <- combo %>% dplyr::select(dplyr::all_of(td$predictors))
 
-  vi_perm <- vip::vi_permute(
-    object            = res$fit_object,   # caret::train
-    train             = train_x,
-    target            = train_y,
-    metric            = rmse_loss,
-    pred_wrapper      = pred_wrap_caret,
-    nsim              = 20,
-    keep              = TRUE,
-    parallel          = FALSE,
-    smaller_is_better = TRUE
+  vi_cpi <- compute_cpi_tbl(
+    object   = res$fit_object,              # caret::train
+    train_x  = train_x,
+    train_y  = train_y,
+    pred_fun = pred_wrap_caret,             # predict(object, newdata)
+    nsim     = 20,
+    sampler  = "copula"
   )
 
   parts <- strsplit(model_id, "_", fixed = TRUE)[[1]]
   tibble::tibble(
     response   = parts[1],
     set        = parts[2],
-    alg        = parts[3],                # "xgb" or "rfr"
-    Variable   = vi_perm$Variable,
-    Importance = vi_perm$Importance,
-    Stderr     = vi_perm$StDev,
-    type       = "permutation"
+    alg        = parts[3],                  # "xgb" or "rfr"
+    Variable   = vi_cpi$Variable,
+    Importance = vi_cpi$Importance,
+    Stderr     = vi_cpi$Stderr,
+    type       = "cpi"
   )
 })
 
 # Permutation importance for LME models (fixed-effects only) 
-perm_vi_lme <- purrr::imap_dfr(results_lme, function(res, model_id) {
+cpi_vi_lme <- purrr::imap_dfr(results_lme, function(res, model_id) {
   parts <- strsplit(model_id, "_", fixed = TRUE)[[1]]
   response_key <- parts[1]
   set_key      <- parts[2]
 
-  # Rebuild the same full dataset used for this response+set
   frame <- get_train_frame(paste(response_key, set_key, "x", sep = "_"))
-
-  kept <- res$kept_full
+  kept  <- res$kept_full
   if (length(kept) == 0L) {
     return(tibble::tibble(
       response = response_key, set = set_key, alg = "lme",
-      Variable = character(0), Importance = numeric(0), Stderr = numeric(0), type = "permutation"
+      Variable = character(0), Importance = numeric(0), Stderr = numeric(0), type = "cpi"
     ))
   }
 
-  # Construct aligned training frame; include Site/Datetime just in case
   combo <- frame$df %>%
-    dplyr::select(dplyr::all_of(c("Site", "Datetime", frame$response, kept))) %>%
+    dplyr::select(dplyr::all_of(c("Site","Datetime", frame$response, kept))) %>%
     tidyr::drop_na()
 
   train_x <- combo %>% dplyr::select(dplyr::all_of(kept))
   train_y <- combo[[frame$response]]
 
-  # Fixed-effects predictions (level = 0) — avoids random-effects grouping errors
+  # fixed-effects only keeps prediction stable across conditional draws
   pred_wrap_lme <- make_lme_pred_wrapper(level = 0)
 
-  vi_perm <- vip::vi_permute(
-    object            = res$fit_object,   # nlme::lme
-    train             = train_x,
-    target            = train_y,
-    metric            = rmse_loss,
-    pred_wrapper      = pred_wrap_lme,
-    nsim              = 20,
-    keep              = TRUE,
-    parallel          = FALSE,
-    smaller_is_better = TRUE
+  vi_cpi <- compute_cpi_tbl(
+    object   = res$fit_object,   # nlme::lme
+    train_x  = train_x,
+    train_y  = train_y,
+    pred_fun = pred_wrap_lme,
+    nsim     = 20,
+    sampler  = "copula"
   )
 
   tibble::tibble(
     response   = response_key,
     set        = set_key,
     alg        = "lme",
-    Variable   = vi_perm$Variable,
-    Importance = vi_perm$Importance,
-    Stderr     = vi_perm$StDev,
-    type       = "permutation"
+    Variable   = vi_cpi$Variable,
+    Importance = vi_cpi$Importance,
+    Stderr     = vi_cpi$Stderr,
+    type       = "cpi"
   )
 })
 
@@ -981,14 +1012,14 @@ internal_vi_all <- purrr::imap_dfr(results_refined, function(res, model_id) {
 })
 
 # Combine & save 
-varimp_perm_all <- dplyr::bind_rows(perm_vi_ml, perm_vi_lme)
-varimp_combined <- dplyr::bind_rows(internal_vi_all, varimp_perm_all)
+varimp_cpi_all   <- dplyr::bind_rows(cpi_vi_ml, cpi_vi_lme)
+varimp_combined  <- dplyr::bind_rows(internal_vi_all, varimp_cpi_all)
 
-readr::write_csv(varimp_perm_all,  file.path(output_dir, "varimp_permutation_ALL_algorithms.csv"))
-readr::write_csv(varimp_combined,  file.path(output_dir, "varimp_internal_vs_permutation_ALL_algorithms.csv"))
+readr::write_csv(varimp_cpi_all, file.path(output_dir, "varimp_CPI_ALL_algorithms.csv"))
+readr::write_csv(varimp_combined, file.path(output_dir, "varimp_internal_vs_CPI_ALL_algorithms.csv"))
 
 # Quick peek: top 10 by permutation for each (response,set,alg)
-varimp_perm_all %>%
+varimp_cpi_all %>%
   dplyr::group_by(response, set, alg) %>%
   dplyr::slice_max(Importance, n = 10, with_ties = FALSE) %>%
   dplyr::ungroup()
@@ -1000,7 +1031,7 @@ library(forcats)
 library(stringr)
 
 # 1) Filter to Set A (full predictors)
-vi_A <- varimp_perm_all %>%
+vi_A <- varimp_cpi_all %>%
   dplyr::filter(set == "A") %>%
   dplyr::mutate(
     alg = dplyr::recode(alg,
@@ -1019,17 +1050,14 @@ vi_A <- varimp_perm_all %>%
     response = factor(response, levels = c("Max","Mean","Range"))
   )
 
-# 2) Compute ordering: per-response mean importance across algorithms
-mean_imp <- vi_A %>%
-  group_by(response, Variable) %>%
-  summarise(mean_imp = mean(Importance, na.rm = TRUE), .groups = "drop")
-
-# 3) Keep top-k variables per response by that mean importance (tune top_k)
+# 2–3) Compute per-response mean importance and keep top-k per response
 top_k <- 12
-top_vars <- mean_imp %>%
-  group_by(response) %>%
-  slice_max(mean_imp, n = top_k, with_ties = FALSE) %>%
-  ungroup()
+top_vars <- vi_A %>%
+  dplyr::group_by(response, Variable) %>%
+  dplyr::summarise(mean_imp = mean(Importance, na.rm = TRUE), .groups = "drop") %>%
+  dplyr::group_by(response) %>%
+  dplyr::slice_max(mean_imp, n = top_k, with_ties = FALSE) %>%
+  dplyr::ungroup()
 
 # 4) Build plotting frame: join mean_imp so we can order by it
 plot_df <- vi_A %>%
@@ -1091,7 +1119,7 @@ p_vi_A <- ggplot(
   ) +
   # >>> Limit the horizontal axis to [0, 1] for LME facets only <<<
   ggh4x::facetted_pos_scales(
-    y = list(alg == "LME" ~ scale_y_continuous(limits = c(0, 1)))
+    y = list(alg == "LME" ~ scale_y_continuous(limits = c(0, 2)))
   )
 
 
@@ -1103,7 +1131,7 @@ ggsave("C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/figures/varimp_globa
 
 ```
 
-*Pred vs Obs plots
+*Pred vs Obs plots*
 ```{r}
 # helper: label mapping
 resp_lab <- c(max = "Max WT", mean = "Mean WT", range = "Range WT")

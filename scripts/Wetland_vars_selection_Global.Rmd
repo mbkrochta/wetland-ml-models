@@ -17,12 +17,11 @@ library(broom)
 # -----------------------------
 # 1) Read data
 # -----------------------------
-# Use your path; if you're running this in the ChatGPT sandbox, switch to the uploaded file:
-# df <- read.csv("/mnt/data/daily_wetlands_dataset.csv")
 df <- read.csv("C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/data/daily_wetlands_dataset.csv")
 
 # -----------------------------
 # 2) Columns to standardize (by Site), preserving names
+#    Only WL* and GWL* are scaled. GWT* and Water_area_m2_3d are kept raw.
 # -----------------------------
 vars_to_scale <- c(
   # WL
@@ -30,21 +29,14 @@ vars_to_scale <- c(
   "WL_mean_2day","WL_mean_3day","WL_mean_7day",
   "WL_max_2day","WL_max_3day","WL_max_7day",
   "WL_min_2day","WL_min_3day","WL_min_7day",
-  # GWT
-  "GWT_mean","GWT_max","GWT_min","GWT_range",
-  "GWT_mean_2day","GWT_mean_3day","GWT_mean_7day",
-  "GWT_max_2day","GWT_max_3day","GWT_max_7day",
-  "GWT_min_2day","GWT_min_3day","GWT_min_7day",
   # GWL
   "GWL_mean","GWL_max","GWL_min","GWL_range",
   "GWL_mean_2day","GWL_mean_3day","GWL_mean_7day",
   "GWL_max_2day","GWL_max_3day","GWL_max_7day",
-  "GWL_min_2day","GWL_min_3day","GWL_min_7day",
-  # Water area
-  "Water_area_m2_3d"
+  "GWL_min_2day","GWL_min_3day","GWL_min_7day"
 )
 
-# Keep only those that actually exist in the data to avoid errors
+# Keep only those that actually exist in the data
 vars_to_scale <- intersect(vars_to_scale, names(df))
 
 # Safe z-score function (NA-aware; if sd==0, return 0 for non-NA rows)
@@ -52,7 +44,6 @@ z_by_site <- function(x) {
   m <- mean(x, na.rm = TRUE)
   s <- sd(x, na.rm = TRUE)
   if (is.na(s) || s == 0) {
-    # constant (or all NA) within site: keep NAs as NA, others as 0
     return(ifelse(is.na(x), NA_real_, 0))
   } else {
     return((x - m) / s)
@@ -60,7 +51,7 @@ z_by_site <- function(x) {
 }
 
 # -----------------------------
-# 3) Standardize by Site (in place; names unchanged)
+# 3) Standardize by Site (only WL* and GWL*; names unchanged)
 # -----------------------------
 df_std <- df %>%
   group_by(Site) %>%
@@ -68,12 +59,10 @@ df_std <- df %>%
   ungroup()
 
 # -----------------------------
-# 4) Model setup (same as yours)
+# 4) Model setup
 # -----------------------------
-# Define response variables
 responses <- c("mean_WT", "max_WT", "range_WT")
 
-# Define predictor groups
 predictor_groups <- list(
   Solar    = c("Solar_daily", "Solar_2d", "Solar_3d", "Solar_7d"),
   WL_mean  = c("WL_daily_mean", "WL_mean_2day", "WL_mean_3day", "WL_mean_7day"),
@@ -92,6 +81,7 @@ predictor_groups <- list(
 )
 
 # Static predictors to keep for all models
+# Note: WL_daily_range and GWL_range are scaled; GWT_range and Water_area_m2_3d are raw
 static_predictors <- c(
   "Air_trange", "WL_daily_range",
   "GWT_range", "GWL_range", "Water_area_m2_3d",
@@ -101,9 +91,7 @@ static_predictors <- c(
 # -----------------------------
 # 5) Variable selection on standardized data
 # -----------------------------
-# Use df_std (standardized predictors) for the selection
 find_best_predictors <- function(response_var) {
-  # For each group, fit simple linear models with each member; pick best by adj. R^2
   results <- map_df(predictor_groups, function(vars) {
     existing <- intersect(vars, names(df_std))
     if (length(existing) == 0) {
@@ -112,7 +100,7 @@ find_best_predictors <- function(response_var) {
     models <- set_names(existing) %>%
       map(~ lm(reformulate(.x, response_var), data = df_std))
     metrics <- map_dfr(models, glance, .id = "predictor")
-    best <- metrics %>% filter(adj.r.squared == max(adj.r.squared, na.rm = TRUE))
+    best <- metrics %>% filter(adj.r.squared == max(adj.r.squared, na.rm = TRUE)) %>% slice(1)
     best
   }, .id = "group")
   results
@@ -121,28 +109,20 @@ find_best_predictors <- function(response_var) {
 best_predictors_all <- map(responses, find_best_predictors)
 names(best_predictors_all) <- responses
 
-# Final predictor lists (best from each group + static)
 combined_predictor_lists <- map(best_predictors_all, ~ unique(c(.x$predictor, static_predictors)))
 
 # -----------------------------
 # 6) Build model datasets (keep Site, Datetime, response)
 # -----------------------------
 model_data <- map2(combined_predictor_lists, responses, function(vars, response) {
-  df_std %>%
-    select(all_of(c("Site", "Datetime", response, vars))) %>%
-    # ensure predictors exist (in case some static vars are absent)
-    select(where(~ TRUE))
+  df_std %>% select(any_of(c("Site", "Datetime", response, vars)))
 })
+names(model_data) <- responses
 
-# Named outputs
-mean_model_data  <- model_data$mean_WT
-max_model_data   <- model_data$max_WT
-range_model_data <- model_data$range_WT
+mean_model_data  <- model_data[["mean_WT"]]
+max_model_data   <- model_data[["max_WT"]]
+range_model_data <- model_data[["range_WT"]]
 
-# Optional: peek
-# names(mean_model_data)
-# names(max_model_data)
-# names(range_model_data)
 
 ```
 
@@ -154,7 +134,7 @@ library(tidyverse)
 library(purrr)
 
 # Set correlation threshold
-cor_threshold <- 0.9
+cor_threshold <- 0.8
 
 # Function to remove highly correlated predictors (excluding the response variable, Site, and Datetime)
 remove_correlated_predictors <- function(df, response, threshold = cor_threshold) {
