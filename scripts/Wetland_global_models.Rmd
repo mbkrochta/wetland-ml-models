@@ -1025,30 +1025,109 @@ varimp_cpi_all %>%
   dplyr::ungroup()
 ```
 
+```{r}
+# --- add after building varimp_cpi_all, before plotting ---
+
+# 1) Build permutation VI (with Stderr) for global models
+perm_vi_ml <- purrr::imap_dfr(results_refined, function(res, model_id) {
+  td <- get_train_frame(model_id)
+  combo <- td$df %>%
+    dplyr::select(dplyr::all_of(c(td$response, td$predictors))) %>%
+    tidyr::drop_na()
+  y <- combo[[td$response]]
+  X <- combo %>% dplyr::select(dplyr::all_of(td$predictors))
+
+  v <- vip::vi_permute(
+    object            = res$fit_object,   # caret::train
+    train             = X,
+    target            = y,
+    metric            = rmse_loss,
+    pred_wrapper      = pred_wrap_caret,
+    nsim              = 20,
+    keep              = TRUE,
+    parallel          = FALSE,
+    smaller_is_better = TRUE
+  )
+
+  parts <- strsplit(model_id, "_", fixed = TRUE)[[1]]
+  tibble::tibble(
+    response = parts[1], set = parts[2], alg = parts[3],   # xgb/rfr
+    Variable = v$Variable, Importance_perm = v$Importance,
+    Stderr_perm = v$StDev
+  )
+})
+
+perm_vi_lme <- purrr::imap_dfr(results_lme, function(res, model_id) {
+  parts <- strsplit(model_id, "_", fixed = TRUE)[[1]]
+  response_key <- parts[1]; set_key <- parts[2]
+
+  frame <- get_train_frame(paste(response_key, set_key, "x", sep = "_"))
+  kept  <- res$kept_full
+  if (length(kept) == 0L) {
+    return(tibble::tibble(
+      response = response_key, set = set_key, alg = "lme",
+      Variable = character(0), Importance_perm = numeric(0), Stderr_perm = numeric(0)
+    ))
+  }
+
+  combo <- frame$df %>%
+    dplyr::select(dplyr::all_of(c(frame$response, kept))) %>%
+    tidyr::drop_na()
+  y <- combo[[frame$response]]
+  X <- combo %>% dplyr::select(dplyr::all_of(kept))
+
+  pred_wrap_lme <- make_lme_pred_wrapper(level = 0)
+
+  v <- vip::vi_permute(
+    object            = res$fit_object,   # nlme::lme
+    train             = X,
+    target            = y,
+    metric            = rmse_loss,
+    pred_wrapper      = pred_wrap_lme,
+    nsim              = 20,
+    keep              = TRUE,
+    parallel          = FALSE,
+    smaller_is_better = TRUE
+  )
+
+  tibble::tibble(
+    response = response_key, set = set_key, alg = "lme",
+    Variable = v$Variable, Importance_perm = v$Importance, Stderr_perm = v$StDev
+  )
+})
+
+varimp_perm_all <- dplyr::bind_rows(perm_vi_ml, perm_vi_lme)
+
+# 2) Merge permutation Stderr into CPI (prefer CPI if present)
+varimp_cpi_all_withSE <- varimp_cpi_all %>%
+  dplyr::left_join(
+    varimp_perm_all %>% dplyr::select(response, set, alg, Variable, Stderr_perm),
+    by = c("response","set","alg","Variable")
+  ) %>%
+  dplyr::mutate(Stderr = dplyr::coalesce(Stderr, Stderr_perm)) %>%
+  dplyr::select(-Stderr_perm)
+
+# sanity check
+summary(varimp_cpi_all_withSE$Stderr); sum(is.na(varimp_cpi_all_withSE$Stderr))
+
+```
+
+
 *Variable-importance plots*
 ```{r}
 library(forcats)
 library(stringr)
 
 # 1) Filter to Set A (full predictors)
-vi_A <- varimp_cpi_all %>%
+vi_A <- varimp_cpi_all_withSE %>%
   dplyr::filter(set == "A") %>%
   dplyr::mutate(
-    alg = dplyr::recode(alg,
-      "lme" = "LME",
-      "rfr" = "RFR",
-      "xgb" = "XGB",
-      .default = alg
-    ),
-    response = dplyr::recode(response,
-      "max" = "Max",
-      "mean" = "Mean",
-      "range" = "Range",
-      .default = response
-    ),
+    alg = dplyr::recode(alg, "lme"="LME","rfr"="RFR","xgb"="XGB", .default = alg),
+    response = dplyr::recode(response, "max"="Max","mean"="Mean","range"="Range", .default = response),
     alg = factor(alg, levels = c("LME","RFR","XGB")),
     response = factor(response, levels = c("Max","Mean","Range"))
   )
+
 
 # 2–3) Compute per-response mean importance and keep top-k per response
 top_k <- 12
@@ -1116,11 +1195,7 @@ p_vi_A <- ggplot(
     axis.title.y = element_text(margin = margin(r = 10)),
     panel.spacing = unit(0.5, "lines"),
     plot.margin   = margin(10, 10, 10, 10)
-  ) +
-  # >>> Limit the horizontal axis to [0, 1] for LME facets only <<<
-  ggh4x::facetted_pos_scales(
-    y = list(alg == "LME" ~ scale_y_continuous(limits = c(0, 2)))
-  )
+  ) 
 
 
 print(p_vi_A)

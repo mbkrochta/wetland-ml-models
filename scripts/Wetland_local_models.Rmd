@@ -1340,52 +1340,53 @@ pred_wrap_gls   <- function(object, newdata) predict(object, newdata = newdata)
 
 # NEW: light guard in case compute_cpi_tbl() isn't already in the env
 # replace the whole compute_cpi_tbl() helper with this
+# Simplified CPI computation helper
 if (!exists("compute_cpi_tbl")) {
-  compute_cpi_tbl <- function(object, train_x, train_y, pred_fun, nsim = 20, ...) {
-    # Defensive: ensure numeric/data.frame and drop rows with NA used by iml
-    X <- as.data.frame(train_x)
-    # try to coerce non-numeric columns to numeric if possible
-    for (nm in names(X)) {
-      if (!is.numeric(X[[nm]])) {
-        suppressWarnings({
-          asnum <- as.numeric(X[[nm]])
-          if (sum(is.finite(asnum)) >= sum(is.finite(X[[nm]]))) X[[nm]] <- asnum
-        })
-      }
-    }
-    ok <- is.finite(train_y)
-    if (any(!ok)) {
-      X <- X[ok, , drop = FALSE]
-      train_y <- train_y[ok]
-    }
+compute_cpi_tbl <- function(object, train_x, train_y, pred_fun, nsim = 20, ...) {
+  X <- as.data.frame(train_x)
+  y <- train_y
 
-    pred <- iml::Predictor$new(
-      model = object,
-      data  = X,
-      y     = train_y,
-      predict.function = function(m, newdata) pred_fun(m, newdata)
+  pred <- iml::Predictor$new(
+    model = object,
+    data  = X,
+    y     = y,
+    predict.function = function(m, newdata) pred_fun(m, newdata)
+  )
+
+  reps <- vector("list", nsim)
+  for (i in seq_len(nsim)) {
+    # different seed each rep for true variability
+    set.seed(1000 + i)
+    fi <- tryCatch(
+      iml::FeatureImp$new(
+        pred,
+        loss          = function(obs, hat) sqrt(mean((obs - hat)^2)),
+        compare       = "difference",
+        n.repetitions = 1,        # <-- one at a time
+        conditional   = TRUE      # safe with iml 0.11.4; remove if it errors
+      ),
+      error = function(e) NULL
     )
-
-    args <- list(
-      pred,
-      loss          = function(obs, hat) sqrt(mean((obs - hat)^2)),  # <-- use function, not "rmse"
-      compare       = "difference",
-      n.repetitions = nsim
-    )
-    if ("conditional" %in% names(formals(iml::FeatureImp$new))) {
-      args$conditional <- TRUE
+    if (!is.null(fi)) {
+      reps[[i]] <- fi$results[, c("feature", "importance")]
     }
-
-    set.seed(42)  # reproducible permutations per call
-    fi  <- do.call(iml::FeatureImp$new, args)
-    out <- as.data.frame(fi$results)
-
-    tibble::tibble(
-      Variable   = out$feature,
-      Importance = out$importance,
-      Stderr     = NA_real_
-    )
   }
+
+  reps <- reps[!vapply(reps, is.null, logical(1))]
+  if (!length(reps)) {
+    return(tibble::tibble(Variable = character(), Importance = numeric(), Stderr = numeric()))
+  }
+
+  long <- dplyr::bind_rows(reps)
+  long %>%
+    dplyr::group_by(feature) %>%
+    dplyr::summarise(
+      Variable   = dplyr::first(feature),
+      Importance = mean(importance, na.rm = TRUE),
+      Stderr     = sd(importance, na.rm = TRUE),
+      .groups = "drop"
+    )
+}
 }
 
 # Final model selection (ML rows only)
@@ -1410,6 +1411,25 @@ load_final_ml_model <- function(site, metric, setAB, model, source) {
     if (!key %in% names(orig_list)) stop("Original model not in list: ", key)
     orig_list[[key]]
   }
+}
+
+# Helper: resolve which response column corresponds to each metric keyword
+resolve_response_col <- function(df, metric) {
+  # Try matching case-insensitive substrings in column names
+  metric_lower <- tolower(metric)
+  cols <- names(df)
+
+  match_idx <- switch(metric_lower,
+    "max"   = grep("max", cols, ignore.case = TRUE, value = TRUE)[1],
+    "mean"  = grep("mean", cols, ignore.case = TRUE, value = TRUE)[1],
+    "range" = grep("range", cols, ignore.case = TRUE, value = TRUE)[1],
+    cols[1]  # fallback: first column if none matched
+  )
+
+  if (is.na(match_idx) || is.null(match_idx)) {
+    stop("Could not resolve response column for metric = ", metric)
+  }
+  return(match_idx)
 }
 
 # Build X/y from the on-disk local CSV, aligned to a given predictor set
@@ -1608,15 +1628,46 @@ readr::write_csv(varimp_perm_cpi_local_ALL_final, OUT_FILE_MERGED)
 message("Wrote: ", OUT_FILE_MERGED, "\nRows: ", nrow(varimp_perm_cpi_local_ALL_final))
 
 ```
+```{r}
+library(dplyr)
+library(readr)
+
+# --- Read both variable-importance tables ---
+perm <- readr::read_csv(
+  "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/results/local_results/varimp_perm_local_ALL_final.csv",
+  show_col_types = FALSE
+)
+cpi <- readr::read_csv(
+  "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/results/local_results/varimp_cpi_local_ALL_final.csv",
+  show_col_types = FALSE
+)
+
+# --- Merge permutation SEs into CPI results ---
+cpi_with_se <- cpi %>%
+  dplyr::left_join(
+    perm %>% dplyr::select(Site, Metric, Set, Model, Variable, Stderr_perm = Stderr),
+    by = c("Site", "Metric", "Set", "Model", "Variable")
+  ) %>%
+  dplyr::mutate(Stderr = dplyr::coalesce(Stderr, Stderr_perm)) %>%
+  dplyr::select(-Stderr_perm)
+
+# --- Write the new merged file ---
+readr::write_csv(
+  cpi_with_se,
+  "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/results/local_results/varimp_cpi_local_ALL_final_withSE.csv"
+)
+```
+
 
 *Variable importance plots*
 ```{r}
 library(forcats)
 library(stringr)
 library(ggh4x)
+library(ggplot2)
 
-# use CPI output
-vi_file    <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/results/local_results/varimp_cpi_local_ALL_final.csv"
+# use CPI output (with SEs merged in)
+vi_file    <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/results/local_results/varimp_cpi_local_ALL_final_withSE.csv"
 output_dir <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/figures"
 
 # Load & prep
@@ -1638,10 +1689,12 @@ vi <- vi_raw %>%
       TRUE ~ Metric
     ),
     alg = factor(alg, levels = c("GLS","RFR","XGB")),
-    response = factor(response, levels = c("Max","Mean","Range"))
+    response = factor(response, levels = c("Max","Mean","Range")),
+    Importance = as.numeric(Importance),
+    Stderr     = as.numeric(Stderr)
   ) %>%
+  dplyr::filter(!is.na(Importance)) %>%
   dplyr::select(Site, response, alg, Variable, Importance, Stderr)
-
 
 # Build list of vars (per Site × response) dropped by GLS VIF in Set A
 if (exists("vif_log_local_lme")) {
@@ -1661,13 +1714,10 @@ dropped_local_A <- vif_local %>%
   ) %>%
   dplyr::distinct(Site, var_key)
 
-
-library(ggplot2)
-
 # SITE-SPECIFIC mini-global plot 
 make_site_plot <- function(site_name, top_k = 12, clamp_LME = FALSE) {
 
-  # 1) choose top-k variables *within this site x response* (mean across algs)
+  # 1) choose top-k variables within this site x response (mean across algs)
   site_top <- vi %>%
     dplyr::filter(Site == site_name) %>%
     dplyr::group_by(response, Variable) %>%
@@ -1683,10 +1733,16 @@ make_site_plot <- function(site_name, top_k = 12, clamp_LME = FALSE) {
   plot_df <- vi %>%
     dplyr::filter(Site == site_name) %>%
     dplyr::mutate(
-      var_key = paste0(response, "__", Variable),
-      Importance = dplyr::coalesce(Importance, 0)
+      var_key   = paste0(response, "__", Variable),
+      Importance = dplyr::coalesce(Importance, 0),
+      Stderr     = dplyr::coalesce(Stderr, 0)
     ) %>%
-    dplyr::inner_join(site_top, by = c("response","Variable","var_key"))
+    dplyr::inner_join(site_top, by = c("response","Variable","var_key")) %>%
+    dplyr::mutate(
+      # use SE whiskers; switch to 1.96*Stderr for ~95% if you prefer
+      err_low  = pmax(0, Importance - Stderr),
+      err_high = Importance + Stderr
+    )
 
   dropped_site <- dropped_local_A %>% dplyr::filter(Site == site_name)
 
@@ -1701,15 +1757,13 @@ make_site_plot <- function(site_name, top_k = 12, clamp_LME = FALSE) {
 
   p <- ggplot(plot_df, aes(x = forcats::fct_reorder(var_key, mean_imp), y = Importance)) +
     geom_col(width = 0.75) +
-    geom_errorbar(aes(ymin = pmax(0, Importance - Stderr),
-                      ymax = Importance + Stderr),
-                  width = 0.2, alpha = 0.5) +
+    geom_errorbar(aes(ymin = err_low, ymax = err_high), width = 0.15, linewidth = 0.3) +
     geom_hline(yintercept = 0, linewidth = 0.4, linetype = "dashed") +
     coord_flip() +
     facet_grid(response ~ alg, scales = "free_y", space = "free_y") +
     scale_x_discrete(labels = label_map) +
     labs(
-      title = paste0("Local conditional permutation importance — ", site_name),
+      title = paste0("Local conditional permutation importance: ", site_name),
       x = "Predictor",
       y = "Importance (ΔRMSE)"
     ) +
@@ -1729,10 +1783,10 @@ make_site_plot <- function(site_name, top_k = 12, clamp_LME = FALSE) {
     )
   }
 
-  return(p)
+  p
 }
 
-# make & save all sites (outside the function)
+# make & save all sites
 dir.create("C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/figures/varimp_local",
            recursive = TRUE, showWarnings = FALSE)
 

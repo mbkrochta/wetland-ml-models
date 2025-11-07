@@ -78,12 +78,11 @@ corr_from_file <- function(path, is_global = FALSE) {
 
   # drop obvious non-predictor columns
   drop_like <- c("date","day","time","datetime","site","id","station","objectid")
-  keep_num  <- df %>%
-    select(where(is.numeric)) %>%
-    select(-any_of(resp_col))
-
-  # also drop numeric columns with zero variance
-  keep_num <- keep_num %>% select(where(~ sd(.x, na.rm = TRUE) > 0))
+  keep_num <- df %>%
+  dplyr::select(where(is.numeric)) %>%
+  dplyr::select(-tidyselect::any_of(resp_col)) %>%
+  purrr::discard(~ stats::sd(.x, na.rm = TRUE) == 0) %>%
+  tibble::as_tibble()
 
   if (ncol(keep_num) == 0) {
     warning("No usable predictor columns found in: ", basename(path))
@@ -101,9 +100,9 @@ corr_from_file <- function(path, is_global = FALSE) {
   })
 
   res %>%
-    mutate(site = site_label,
-           response = resp_label) %>%
-    select(site, response, predictor, rho, p, n)
+  dplyr::mutate(site = site_label, response = resp_label) %>%
+  dplyr::select(site, response, predictor, rho, p, n)
+
 }
 ```
 
