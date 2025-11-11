@@ -114,25 +114,25 @@ loc_all <- bind_rows(
 alg_levels <- c("GLS","RFR","XGB")
 
 ylims_by_resp <- bind_rows(
-  glob_all %>% select(response, RMSE),
-  loc_all  %>% select(response, RMSE)
+  glob_all %>% dplyr::select(response, RMSE),
+  loc_all  %>% dplyr::select(response, RMSE)
 ) %>%
-  group_by(response) %>%
-  summarise(
+  dplyr::group_by(response = as.character(response)) %>%  # <- key change
+  dplyr::summarise(
     ymin = 0,
     ymax = max(RMSE, na.rm = TRUE),
     .groups = "drop"
   ) %>%
-  # bump to a "nice" tick just above the max
-  mutate(ymax = max(pretty(c(0, ymax))))
+  dplyr::mutate(ymax = max(pretty(c(0, ymax))))
 
-# Build a small data frame to "pin" facet limits
-ylims_df <- tidyr::expand_grid(
+grid <- tidyr::expand_grid(
   response = unique(ylims_by_resp$response),
-  alg      = factor(alg_levels, levels = alg_levels)
-) %>%
-  left_join(ylims_by_resp, by = "response") %>%
+  alg = factor(alg_levels, levels = alg_levels)
+)
+
+ylims_df <- dplyr::left_join(grid, ylims_by_resp, by = "response") %>%
   tidyr::pivot_longer(c(ymin, ymax), names_to = "which", values_to = "RMSE")
+
 
 
 # ---------- Plot function (one set at a time) ----------
