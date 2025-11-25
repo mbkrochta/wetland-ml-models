@@ -1,0 +1,295 @@
+---
+title: "Combined_cor/vi_plot"
+output: html_document
+date: "2025-11-21"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(readxl)
+corr_manual <- read_excel("~/corr_manual.xlsx")
+vi_all <- read_excel("~/vi_all.xlsx")
+```
+
+```{r}
+# First table: variable importance
+# vi_all: Site, Metric ("max","mean","range"), Model, Variable, Importance
+
+vi_all2 <- vi_all %>%
+  mutate(
+    Metric_long = case_when(
+      Metric == "max"   ~ "Max WT",
+      Metric == "mean"  ~ "Mean WT",
+      Metric == "range" ~ "Range WT",
+      TRUE ~ Metric
+    )
+  )
+
+# Second table: correlations
+# corr_manual: Site, Metric ("Max WT","Mean WT","Range WT"), Variable, rho
+
+combined_tbl <- vi_all2 %>%
+  inner_join(
+    corr_manual,
+    by = c("Site", "Metric_long" = "Metric", "Variable")
+  ) %>%
+  select(Site, Metric = Metric_long, Model, Variable, Importance, rho)
+
+write_csv(
+  combined_tbl,file = "varimp_with_rho_combined.csv")
+
+```
+
+```{r}
+library(tidyverse)
+library(stringr)
+
+library(dplyr)
+library(stringr)
+
+## ---- helper functions (put these BEFORE the pipeline) -----------------
+
+extract_var <- function(v) {
+  v <- tolower(v)
+  v <- gsub("_m2_3d|_m2|_3d|_7day|_7d|_3day|_3d|_2day|_2d|_daily|min|max|mean|range",
+            "", v)
+  v <- gsub("^_", "", v)
+  v
+}
+
+extract_metric <- function(v) {
+  v <- tolower(v)
+  base <- extract_var(v)
+  case_when(
+    grepl("min",  v) ~ paste0(base, "_min"),
+    grepl("max",  v) ~ paste0(base, "_max"),
+    grepl("mean", v) ~ paste0(base, "_mean"),
+    grepl("range",v) ~ paste0(base, "_range"),
+    TRUE             ~ base
+  )
+}
+
+extract_lag <- function(v) {
+  v <- tolower(v)
+  case_when(
+    grepl("7day|7d", v) ~ "7day",
+    grepl("3day|3d", v) ~ "3day",
+    grepl("2day|2d", v) ~ "2day",
+    grepl("daily",    v) ~ "daily",
+    TRUE                 ~ "none"
+  )
+}
+
+## ---- main plot_data object -------------------------------------------
+
+plot_data <- combined_tbl %>%
+  # clean up model labels and factor order
+  mutate(
+    Model_clean = case_when(
+      Model %in% c("GLS", "lme", "LME") ~ "LME/GLS",
+      Model %in% c("RFR", "rfr")        ~ "RFR",
+      Model %in% c("XGB", "xgb")        ~ "XGB",
+      TRUE                              ~ Model
+    ),
+    Site = factor(
+      Site,
+      levels = c("Global", "Anvil", "Butte", "Cooper",
+                 "Crater", "Hideaway", "Pint", "Sam")
+    ),
+    Model_clean = factor(Model_clean, levels = c("LME/GLS", "RFR", "XGB"))
+  ) %>%
+  # classify lag type and collapse to one row name per var+metric
+  mutate(
+    Lag_raw = extract_lag(Variable),
+    VarRow  = extract_metric(Variable)
+  ) %>%
+  # standardize importance within Metric x Site x Model
+  group_by(Metric, Site, Model_clean) %>%
+  mutate(
+    Importance_scaled = {
+      mn <- min(Importance, na.rm = TRUE)
+      mx <- max(Importance, na.rm = TRUE)
+      if (mx > mn) (Importance - mn) / (mx - mn) else 0
+    }
+  ) %>%
+  ungroup() %>%
+  # variable categories & groups
+  mutate(
+    VarGroup_raw = case_when(
+      grepl("^size",  VarRow)            ~ "Size_km2",
+      grepl("^elev",  VarRow)            ~ "Elev_m",
+      grepl("^ppt",   VarRow)            ~ "ppt",
+      grepl("^air_",  VarRow)            ~ "Air",
+      grepl("^solar", VarRow)            ~ "Solar",
+      grepl("^water_area", VarRow)       ~ "Water area",
+      grepl("^gwt_",  VarRow)            ~ "GWT",
+      grepl("^gwl_",  VarRow)            ~ "GWL",
+      grepl("^wl_",   VarRow)            ~ "WL",
+      TRUE                               ~ NA_character_
+    ),
+    VarGroup = case_when(
+      VarGroup_raw %in% c("Size_km2", "Elev_m") ~ "Static",
+      VarGroup_raw %in% c("ppt", "Air", "Solar") ~ "Atmospheric",
+      VarGroup_raw %in% c("Water area", "GWT", "GWL", "WL") ~ "Hydrologic",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  # drop anything not in one of the 3 groups (optional)
+  filter(!is.na(VarGroup)) %>%
+  mutate(
+    Lag = factor(
+      dplyr::recode(
+        Lag_raw,
+        "none"  = "No lag / static",
+        "daily" = "Daily",
+        "2day"  = "2-day",
+        "3day"  = "3-day",
+        "7day"  = "7-day"
+      ),
+      levels = c("No lag / static", "Daily", "2-day", "3-day", "7-day")
+    ),
+    VarGroup = factor(VarGroup,
+                      levels = c("Static", "Atmospheric", "Hydrologic")),
+    VarRow = factor(VarRow, levels = rev(sort(unique(VarRow))))
+  )
+```
+
+```{r}
+library(ggtext)
+
+plot_metric_bubbles <- function(metric_label) {
+
+  df <- plot_data %>%
+    filter(Metric == metric_label) %>%
+    mutate(
+      # shrink triangles for visual equivalence
+      Importance_adj = case_when(
+        Lag %in% c("Daily", "7-day") ~ Importance_scaled * 0.82,
+        TRUE ~ Importance_scaled
+      ),
+      # bold the Global label
+      Site_label = ifelse(Site == "Global", "<b>Global</b>", as.character(Site)),
+      Site_label = factor(Site_label, levels = unique(Site_label))
+    )
+
+  ggplot(df, aes(x = Site_label, y = VarRow)) +
+    geom_point(
+      aes(
+        size  = Importance_adj,
+        color = rho,
+        fill  = rho,
+        shape = Lag
+      ),
+      alpha  = 0.9,
+      stroke = 0.3
+    ) +
+
+    # Color scale
+    scale_color_gradient2(
+      low  = "#2166ac",
+      mid  = "white",
+      high = "#b2182b",
+      midpoint = 0,
+      limits   = c(-1, 1),
+      oob      = scales::squish,
+      name     = "Spearman correlation"
+    ) +
+
+    scale_fill_gradient2(
+      low  = "#2166ac",
+      mid  = "white",
+      high = "#b2182b",
+      midpoint = 0,
+      limits   = c(-1, 1),
+      oob      = scales::squish,
+      guide    = "none"
+    ) +
+
+    scale_size_area(
+      max_size = 7,
+      limits   = c(0, 1),
+      breaks   = c(0, 0.25, 0.5, 0.75, 1),
+      name     = "Relative importance (0–1)"
+    ) +
+
+    scale_shape_manual(
+      values = c(
+        "No lag / static" = 16,
+        "Daily"           = 17,
+        "2-day"           = 15,
+        "3-day"           = 18,
+        "7-day"           = 25
+      ),
+      name = "Lag"
+    ) +
+
+    guides(
+      size  = guide_legend(order = 1),
+      shape = guide_legend(
+        override.aes = list(size = 4, fill = "black"),
+        order = 2
+      )
+    ) +
+
+    facet_grid(
+      VarGroup ~ Model_clean,
+      scales = "free_y",
+      space  = "free_y",
+      switch = "y"
+    ) +
+
+    scale_y_discrete(limits = rev) +
+    labs(
+      x = "Site",
+      y = NULL,
+      title = metric_label
+    ) +
+
+    theme_minimal(base_size = 11) +
+    theme(
+      # guide lines
+      panel.grid.major.x = element_line(color = "grey90", linewidth = 0.3),
+      panel.grid.major.y = element_line(color = "grey90", linewidth = 0.3),
+      panel.grid.minor   = element_blank(),
+
+      # white backgrounds
+      panel.background  = element_rect(fill = "white", color = NA),
+      plot.background   = element_rect(fill = "white", color = NA),
+      legend.background = element_rect(fill = "white", color = NA),
+      strip.background  = element_rect(fill = "grey90", color = NA),
+
+      # bold Global with markdown
+      axis.text.x = element_markdown(angle = 45, hjust = 1),
+
+      strip.text.x = element_text(face = "bold", size = 12),
+      strip.text.y = element_text(face = "bold", size = 11),
+
+      legend.position = "right",
+      strip.placement = "outside",
+
+      # add spacing between LME/GLS, RFR, XGB columns
+      panel.spacing.x = unit(1.2, "lines")
+    )
+}
+
+```
+
+
+```{r}
+p_max   <- plot_metric_bubbles("Max WT")
+p_mean  <- plot_metric_bubbles("Mean WT")
+p_range <- plot_metric_bubbles("Range WT")
+
+p_max
+p_mean
+p_range
+
+ggsave("MaxWT_bubbles.png", p_max, width = 10, height = 8, dpi = 300, bg = "white")
+ggsave("MeanWT_bubbles.png", p_mean, width = 10, height = 8, dpi = 300, bg = "white")
+ggsave("RangeWT_bubbles.png", p_range, width = 10, height = 8, dpi = 300, bg = "white")
+
+```
+
