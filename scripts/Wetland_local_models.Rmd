@@ -1959,7 +1959,7 @@ make_response_grid <- function(dat, resp_label, site_order = NULL, show_metrics 
   ggplot(dd, aes(x = obs, y = pred)) +
     geom_point(alpha = 0.65, size = 1.6, stroke = 0.25) +
     geom_abline(slope = 1, intercept = 0, linetype = "dashed", linewidth = 0.7) +
-    geom_smooth(method = "lm", se = FALSE, linewidth = 0.9) +
+    geom_smooth(method = "lm", se = FALSE, linewidth = 0.9,  color = "red") +
     {
       if (show_metrics)
         geom_text(
@@ -1977,7 +1977,7 @@ make_response_grid <- function(dat, resp_label, site_order = NULL, show_metrics 
     scale_y_continuous(limits = lims, breaks = brk, minor_breaks = NULL,
                        labels = scales::label_number(accuracy = 1)) +
     labs(
-      title = paste0("Observed vs Predicted - ", resp_label),
+      title = paste0(resp_label),
       x = "Observed (°C)",
       y = "Predicted (°C)"
     ) +
