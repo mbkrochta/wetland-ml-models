@@ -212,13 +212,29 @@ plot_local_vs_global("B")
 
 ```
 ```{r}
-# Ensure Set is a nice factor for row strips
-glob_all <- glob_all %>%
-  mutate(set = factor(set, levels = c("A","B"), labels = c("Full","Partial")))
-loc_all  <- loc_all  %>%
-  mutate(set = factor(set, levels = c("A","B"), labels = c("Full","Partial")))
+# --- Collapse GLS/LME into LM + set factor levels --------------------------------
+alg_levels <- c("LM", "RFR", "XGB")
 
-# Rebuild y-limits df with Full/Partial (prevents NA facet rows)
+glob_all <- glob_all %>%
+  mutate(
+    alg = dplyr::recode(alg, "GLS" = "LM", "LME" = "LM"),
+    alg = factor(alg, levels = alg_levels),
+    set = factor(set, levels = c("A","B"), labels = c("Full","Partial"))
+  ) %>%
+  # If both GLS and LME existed for the same grouping, merge after recode
+  group_by(response, set, alg) %>%
+  summarize(RMSE = mean(RMSE, na.rm = TRUE), .groups = "drop")
+
+loc_all <- loc_all %>%
+  mutate(
+    alg = dplyr::recode(alg, "GLS" = "LM", "LME" = "LM"),
+    alg = factor(alg, levels = alg_levels),
+    set = factor(set, levels = c("A","B"), labels = c("Full","Partial"))
+  ) %>%
+  group_by(Site, response, set, alg) %>%
+  summarize(RMSE = mean(RMSE, na.rm = TRUE), .groups = "drop")
+
+# --- Rebuild y-limits df with Full/Partial (prevents NA facet rows) --------------
 ylims_df <- tidyr::expand_grid(
   response = unique(ylims_by_resp$response),
   alg      = factor(alg_levels, levels = alg_levels),
@@ -227,13 +243,13 @@ ylims_df <- tidyr::expand_grid(
   dplyr::left_join(ylims_by_resp, by = "response") %>%
   tidyr::pivot_longer(c(ymin, ymax), names_to = "which", values_to = "RMSE")
 
-# Site palette (all 7)
+# --- Site palette (all 7) -------------------------------------------------------
 site_pal <- c(
   Anvil = "#E67E80", Butte = "#8AADF4", Cooper = "#A6D189",
   Crater = "#C6A0F6", Hideaway = "#7DC4E4", Pint = "#E5C890", Sam = "#F4B8E4"
 )
 
-# Combined plot (two rows = Full/Partial; three columns = responses)
+# --- Combined plot (two rows = Full/Partial; three columns = responses) ----------
 p_combined <- ggplot() +
   # pin shared per-response baseline/max
   geom_blank(data = ylims_df, aes(x = alg, y = RMSE)) +
@@ -283,15 +299,21 @@ p_combined <- ggplot() +
     color    = guide_legend(title = "Site")
   ) +
   labs(x = "Algorithm", y = "RMSE (°C)") +
-  theme_minimal(base_size = 12) +
+  theme_minimal(base_size = 16) +
   theme(
-    panel.grid.minor = element_blank(),
-    legend.position  = "bottom",
-    legend.box       = "vertical",
-    strip.text       = element_text(face = "bold")
+    axis.title.x = element_text(size = 18, face = "bold"),
+    axis.title.y = element_text(size = 18, face = "bold"),
+    axis.text.x  = element_text(size = 15),
+    axis.text.y  = element_text(size = 15),
+    strip.text   = element_text(size = 17, face = "bold"),
+    legend.title = element_text(size = 16, face = "bold"),
+    legend.text  = element_text(size = 15),
+    legend.position = "bottom",
+    legend.box      = "vertical",
+    panel.grid.minor = element_blank()
   )
 
-# Save
+# --- Save -----------------------------------------------------------------------
 outfile <- file.path(fig_dir, "local_vs_global_RMSE_Combined_Full_Partial.png")
 ggsave(outfile, p_combined, width = 11, height = 10, dpi = 300, bg = "white")
 message("Saved: ", outfile)

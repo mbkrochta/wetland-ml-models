@@ -86,27 +86,25 @@ extract_lag <- function(v) {
 ## ---- main plot_data object -------------------------------------------
 
 plot_data <- combined_tbl %>%
-  # clean up model labels and factor order
   mutate(
+    # clean up model labels and factor order
     Model_clean = case_when(
-      Model %in% c("GLS", "lme", "LME") ~ "LME/GLS",
-      Model %in% c("RFR", "rfr")        ~ "RFR",
-      Model %in% c("XGB", "xgb")        ~ "XGB",
-      TRUE                              ~ Model
+      Model %in% c("GLS", "lme", "LME") ~ "LM",
+      Model %in% c("RFR", "rfr")       ~ "RFR",
+      Model %in% c("XGB", "xgb")       ~ "XGB",
+      TRUE                             ~ Model
     ),
     Site = factor(
       Site,
       levels = c("Global", "Anvil", "Butte", "Cooper",
                  "Crater", "Hideaway", "Pint", "Sam")
     ),
-    Model_clean = factor(Model_clean, levels = c("LME/GLS", "RFR", "XGB"))
+    Model_clean = factor(Model_clean, levels = c("LM", "RFR", "XGB"))
   ) %>%
-  # classify lag type and collapse to one row name per var+metric
   mutate(
     Lag_raw = extract_lag(Variable),
     VarRow  = extract_metric(Variable)
   ) %>%
-  # standardize importance within Metric x Site x Model
   group_by(Metric, Site, Model_clean) %>%
   mutate(
     Importance_scaled = {
@@ -116,28 +114,26 @@ plot_data <- combined_tbl %>%
     }
   ) %>%
   ungroup() %>%
-  # variable categories & groups
   mutate(
     VarGroup_raw = case_when(
-      grepl("^size",  VarRow)            ~ "Size_km2",
-      grepl("^elev",  VarRow)            ~ "Elev_m",
-      grepl("^ppt",   VarRow)            ~ "ppt",
-      grepl("^air_",  VarRow)            ~ "Air",
-      grepl("^solar", VarRow)            ~ "Solar",
-      grepl("^water_area", VarRow)       ~ "Water area",
-      grepl("^gwt_",  VarRow)            ~ "GWT",
-      grepl("^gwl_",  VarRow)            ~ "GWL",
-      grepl("^wl_",   VarRow)            ~ "WL",
-      TRUE                               ~ NA_character_
+      grepl("^size",  VarRow)       ~ "Size_km2",
+      grepl("^elev",  VarRow)       ~ "Elev_m",
+      grepl("^ppt",   VarRow)       ~ "ppt",
+      grepl("^air_",  VarRow)       ~ "Air",
+      grepl("^solar", VarRow)       ~ "Solar",
+      grepl("^water_area", VarRow)  ~ "OWA",
+      grepl("^gwt_",  VarRow)       ~ "GWT",
+      grepl("^gwl_",  VarRow)       ~ "GWL",
+      grepl("^wl_",   VarRow)       ~ "WL",
+      TRUE                          ~ NA_character_
     ),
     VarGroup = case_when(
-      VarGroup_raw %in% c("Size_km2", "Elev_m") ~ "Static",
-      VarGroup_raw %in% c("ppt", "Air", "Solar") ~ "Atmospheric",
-      VarGroup_raw %in% c("Water area", "GWT", "GWL", "WL") ~ "Hydrologic",
-      TRUE ~ NA_character_
+      VarGroup_raw %in% c("Size_km2", "Elev_m")          ~ "Static",
+      VarGroup_raw %in% c("ppt", "Air", "Solar")        ~ "Atmospheric",
+      VarGroup_raw %in% c("OWA", "GWT", "GWL", "WL")     ~ "Hydrologic",
+      TRUE                                              ~ NA_character_
     )
   ) %>%
-  # drop anything not in one of the 3 groups (optional)
   filter(!is.na(VarGroup)) %>%
   mutate(
     Lag = factor(
@@ -151,10 +147,39 @@ plot_data <- combined_tbl %>%
       ),
       levels = c("No lag / static", "Daily", "2-day", "3-day", "7-day")
     ),
-    VarGroup = factor(VarGroup,
-                      levels = c("Static", "Atmospheric", "Hydrologic")),
-    VarRow = factor(VarRow, levels = rev(sort(unique(VarRow))))
+    VarGroup = factor(VarGroup, levels = c("Static", "Atmospheric", "Hydrologic")),
+
+    # build display labels for y-axis (do NOT tolower() the final output)
+    VarRow_label = {
+      v <- tolower(VarRow)
+
+      # exact replacements
+      v[v == "size_km2"] <- "Size"
+      v[v == "elev_m"]   <- "Elev"
+
+      # prefix replacements (keep the suffix like _range/_mean/_max/_min)
+      v <- str_replace(v, "^air_t_", "AT ")
+      v <- str_replace(v, "^wl_",    "WL ")
+      v <- str_replace(v, "^gwt_",   "GWT ")
+      v <- str_replace(v, "^gwl_",   "GWL ")
+      v <- str_replace(v, "^water_area_", "Open water ")
+      v <- str_replace(v, "^water_area$",  "Open water")
+      v <- str_replace(v, "^solar_", "Solar ")
+
+      # make suffix readable
+      v <- str_replace_all(v, "_", " ")
+
+      v
+    }
+  ) %>%
+  mutate(
+    VarRow_plot = factor(
+      VarRow,
+      levels = rev(sort(unique(VarRow))),
+      labels = VarRow_label[match(rev(sort(unique(VarRow))), VarRow)]
+    )
   )
+
 ```
 
 ```{r}
@@ -165,13 +190,23 @@ plot_metric_bubbles <- function(metric_label) {
   df <- plot_data %>%
     filter(Metric == metric_label) %>%
     mutate(
-      # shrink triangles for visual equivalence
+      # merge No-lag + Daily into a single category
+      Lag = case_when(
+        Lag %in% c("No lag / static", "Daily") ~ "No lag / daily",
+        TRUE ~ as.character(Lag)
+      ),
+      Lag = factor(Lag, levels = c("No lag / daily", "2-day", "3-day", "7-day")),
+
+      # adjust size if you want (optional)
       Importance_adj = case_when(
-        Lag %in% c("Daily", "7-day") ~ Importance_scaled * 0.82,
+        Lag %in% c("2-day", "3-day", "7-day") ~ Importance_scaled * 0.82,
         TRUE ~ Importance_scaled
       ),
+
       # bold the Global label
-      Site_label = ifelse(Site == "Global", "<b>Global</b>", as.character(Site)),
+      Site_label = ifelse(Site == "Global",
+                          "<b>Global</b>",
+                          as.character(Site)),
       Site_label = factor(Site_label, levels = unique(Site_label))
     )
 
@@ -215,16 +250,15 @@ plot_metric_bubbles <- function(metric_label) {
       name     = "Relative importance (0–1)"
     ) +
 
-    scale_shape_manual(
-      values = c(
-        "No lag / static" = 16,
-        "Daily"           = 17,
-        "2-day"           = 15,
-        "3-day"           = 18,
-        "7-day"           = 25
-      ),
-      name = "Lag"
-    ) +
+scale_shape_manual(
+  values = c(
+    "No lag / daily" = 16,  # circle
+    "2-day"          = 15,  # square
+    "3-day"          = 24,  # triangle
+    "7-day"          = 25   # triangle down
+  ),
+  name = "Lag"
+) +
 
     guides(
       size  = guide_legend(order = 1),
@@ -290,6 +324,110 @@ p_range
 ggsave("MaxWT_bubbles.png", p_max, width = 10, height = 8, dpi = 300, bg = "white")
 ggsave("MeanWT_bubbles.png", p_mean, width = 10, height = 8, dpi = 300, bg = "white")
 ggsave("RangeWT_bubbles.png", p_range, width = 10, height = 8, dpi = 300, bg = "white")
+
+```
+```{r}
+plot_metric_bubbles_nolagshapes <- function(metric_label) {
+
+  df <- plot_data %>%
+    filter(Metric == metric_label) %>%
+    mutate(Importance_use = Importance_scaled)
+
+  ggplot(df, aes(x = Site, y = VarRow_plot)) +
+    geom_point(
+      aes(
+        size  = Importance_use,
+        color = rho,
+        fill  = rho
+      ),
+      shape  = 21,
+      alpha  = 0.9,
+      stroke = 0.3
+    ) +
+    scale_x_discrete(
+      limits = levels(plot_data$Site),
+      labels = function(x) {
+        lab <- ifelse(x == "Global", "bold(Global)", x)
+        parse(text = lab)
+      }
+    ) +
+    scale_color_gradient2(
+      low  = "#2166ac",
+      mid  = "white",
+      high = "#b2182b",
+      midpoint = 0,
+      limits   = c(-1, 1),
+      oob      = scales::squish,
+      name     = "Spearman correlation"
+    ) +
+    scale_fill_gradient2(
+      low  = "#2166ac",
+      mid  = "white",
+      high = "#b2182b",
+      midpoint = 0,
+      limits   = c(-1, 1),
+      oob      = scales::squish,
+      guide    = "none"
+    ) +
+    scale_size_area(
+      max_size = 7,
+      limits   = c(0, 1),
+      breaks   = c(0, 0.25, 0.5, 0.75, 1),
+      name     = "Relative importance (0–1)"
+    ) +
+    guides(
+      size = guide_legend(
+        override.aes = list(shape = 21, fill = "black", color = "black", alpha = 1)
+      )
+    ) +
+    facet_grid(
+      VarGroup ~ Model_clean,
+      scales = "free_y",
+      space  = "free_y",
+      switch = "y"
+    ) +
+    scale_y_discrete(limits = rev) +
+    labs(
+      x = "Site",
+      y = NULL,
+      title = metric_label
+    ) +
+    theme_minimal(base_size = 11) +
+    theme(
+      panel.grid.major.x = element_line(color = "grey90", linewidth = 0.3),
+      panel.grid.major.y = element_line(color = "grey90", linewidth = 0.3),
+      panel.grid.minor   = element_blank(),
+
+      panel.background  = element_rect(fill = "white", color = NA),
+      plot.background   = element_rect(fill = "white", color = NA),
+      legend.background = element_rect(fill = "white", color = NA),
+      strip.background  = element_rect(fill = "grey90", color = NA),
+
+      axis.text.x = element_text(angle = 45, hjust = 1),
+
+      strip.text.x = element_text(face = "bold", size = 12),
+      strip.text.y = element_text(face = "bold", size = 11),
+
+      legend.position = "right",
+      strip.placement = "outside",
+      panel.spacing.x = unit(1.2, "lines")
+    )
+}
+
+```
+
+```{r}
+p_max_nolag   <- plot_metric_bubbles_nolagshapes("Max WT")
+p_mean_nolag  <- plot_metric_bubbles_nolagshapes("Mean WT")
+p_range_nolag <- plot_metric_bubbles_nolagshapes("Range WT")
+
+p_max_nolag
+p_mean_nolag
+p_range_nolag
+
+ggsave("MaxWT_bubbles_nolag.png",   p_max_nolag,   width = 10, height = 8, dpi = 300, bg = "white")
+ggsave("MeanWT_bubbles_nolag.png",  p_mean_nolag,  width = 10, height = 8, dpi = 300, bg = "white")
+ggsave("RangeWT_bubbles_nolag.png", p_range_nolag, width = 10, height = 8, dpi = 300, bg = "white")
 
 ```
 
