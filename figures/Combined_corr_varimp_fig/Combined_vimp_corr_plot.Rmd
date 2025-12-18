@@ -164,7 +164,10 @@ plot_data <- combined_tbl %>%
       v <- str_replace(v, "^gwl_",   "GWL ")
       v <- str_replace(v, "^water_area_", "Open water ")
       v <- str_replace(v, "^water_area$",  "Open water")
-      v <- str_replace(v, "^solar_", "Solar ")
+      v <- str_replace(v, "^solar_", "Solar_")
+      v <- str_replace(v, "^solar$", "Solar")
+      v <- str_replace(v, "^solar",  "Solar ")
+      v <- str_replace(v, "^ppt",  "PPT")
 
       # make suffix readable
       v <- str_replace_all(v, "_", " ")
