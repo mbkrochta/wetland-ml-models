@@ -27,7 +27,7 @@ library(grid)
 library(patchwork)
 library(ggh4x)
 
-set.seed(42)        # Reproducibility for folds/shuffles
+set.seed(42)
 
 glob_rds_path <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/results/global_results/results_refined.rds"
 lme_rds_path  <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/results/global_results/results_lme.rds"
@@ -42,7 +42,7 @@ mean_df <- read.csv("C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/data/me
 range_df <- read.csv("C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/data/range_global_data.csv",stringsAsFactors = FALSE)
 
 # Ensure consistent column names and types
-# - Datetime to Date
+# Datetime to Date
 fix_dates <- function(df) {
   if (!inherits(df$Datetime, "Date")) {
     df$Datetime <- as.Date(df$Datetime, tryFormats = c("%Y-%m-%d","%m/%d/%Y","%m/%d/%y"))
@@ -53,7 +53,7 @@ max_df   <- fix_dates(max_df)
 mean_df  <- fix_dates(mean_df)
 range_df <- fix_dates(range_df)
 
-# Response column names (adjust if different)
+# Response column names 
 resp_cols <- list(
   max   = "max_WT",
   mean  = "mean_WT",
@@ -77,7 +77,7 @@ remote_exclude_exact <- c(
   "GWL_max_2day","GWL_max_3day","GWL_max_7day",
   "GWL_min_2day","GWL_min_3day","GWL_min_7day", "Water_area_m2_3d"
 )
-# Also remove any columns that *start with* these prefixes
+# Remove any columns that start with these prefixes
 remote_exclude_prefix <- c("WL_", "GWT_", "GWL_", "Water")
 
 # Build predictor vector for a given df + mode
@@ -185,13 +185,13 @@ train_model <- function(data,
 
   model_type <- match.arg(model_type)
 
-  # 1) Keep only needed columns; drop rows with NA in response/predictors
+  # Keep only needed columns; drop rows with NA in response/predictors
   df <- data %>% select(all_of(c(site_col, date_col, response, predictors))) %>% na.omit()
 
-  # 2) Build blocked folds (weekly)
+  # Build blocked folds (weekly)
   folds <- make_weekly_folds(df, k = k, date_col = date_col)
 
-  # 3) caret control: use our folds + save OOF preds for by-site metrics
+  # use folds + save OOF preds for by-site metrics
   ctrl <- trainControl(
   method          = "cv",
   number          = k,
@@ -202,7 +202,7 @@ train_model <- function(data,
   allowParallel   = TRUE      
 )
 
-  # 4) Default tuning grids if not provided
+  # Default tuning grids if not provided
   if (is.null(tune_grid)) {
     if (model_type == "rfr") {
       tune_grid <- rf_grid_refined(length(predictors))
@@ -211,9 +211,9 @@ train_model <- function(data,
     }
   }
 
-  # 5) Train
+  # Train
   form <- as.formula(paste(response, "~ ."))
-  train_df <- df %>% select(all_of(c(response, predictors)))   # caret formula uses only predictors/response
+  train_df <- df %>% select(all_of(c(response, predictors)))   # caret formula use only predictors/response
 
   if (model_type == "rfr") {
   if (is.null(tune_grid)) tune_grid <- rf_grid_refined(length(predictors))
@@ -240,9 +240,9 @@ train_model <- function(data,
 )
   }
 
-  # 6) Out-of-fold predictions joined back to Site for by-site metrics
+  # Out-of-fold predictions joined back to Site for by-site metrics
   # caret's $pred stores CV preds; need the matching rows' Site values
- # --- OOF predictions: align to original rows via caret's rowIndex
+ # OOF predictions: align to original rows via caret's rowIndex
 if (!"rowIndex" %in% names(fit$pred)) {
   stop("caret did not return 'rowIndex' in fit$pred; cannot align OOF predictions to Site/Date.")
 }
@@ -254,10 +254,10 @@ oof <- fit$pred %>%
   ) %>%
   transmute(Site, Date, obs = obs, pred = pred)
 
-  # 7) Metrics
+  # Metrics
   mets <- compute_metrics(oof, truth_col = "obs", pred_col = "pred", site_col = "Site")
 
-  # 8) Variable importance
+  # Variable importance
   vimp <- varImp(fit)$importance %>%
     rownames_to_column("Variable") %>%
     arrange(desc(Overall))
@@ -309,7 +309,7 @@ run_all <- function() {
                  mean  = mean_df,
                  range = range_df)
 
-    # --- Set A: All predictors (5 sites)
+    # Set A: All predictors (5 sites)
     A <- prep_dataset(df, resp_key, mode = "all")
     # XGB
     results[[paste(resp_key,"A_xgb",sep="_")]] <- train_model(
@@ -322,7 +322,7 @@ run_all <- function() {
       model_type = "rfr", k = 5
     )
 
-    # --- Set B: Remote-only (7 sites)
+    # Set B: Remote-only (7 sites)
     B <- prep_dataset(df, resp_key, mode = "remote")
     # XGB
     results[[paste(resp_key,"B_xgb",sep="_")]] <- train_model(
@@ -380,13 +380,13 @@ best_params_long <- imap_dfr(results_refined, ~{
     -model_id,
     names_to = "param",
     values_to = "value",
-    values_ptypes    = list(value = character()),   # <- force char
+    values_ptypes    = list(value = character()),   
     values_transform = list(value = as.character)
   ) %>%
   separate(model_id, into = c("response","set","alg"), sep = "_") %>%
   relocate(response, set, alg, param, value)
 
-# “Edge of grid?” check (do we need a second pass?)
+# “Edge of grid” check (do we need a second pass?)
 edge_check <- imap_dfr(results_refined, function(x, nm){
   bt <- x$best_params
   grid <- x$cv_results
@@ -449,13 +449,13 @@ fold_disp <- purrr::imap_dfr(results_refined, ~{
   summarise(
     mean_RMSE = mean(RMSE),
     sd_RMSE   = sd(RMSE),
-    cv        = sd_RMSE / mean_RMSE,  # coefficient of variation
+    cv        = sd_RMSE / mean_RMSE,  
     .groups = "drop"
   ) %>%
   arrange(desc(cv))
 
 fold_disp
-#These look very stable — all CVs are well below 0.15, which means k = 5 is giving consistent fold-level RMSE across all models.
+#Lookd very stable — all CVs are well below 0.18, which means k = 5 is giving consistent fold-level RMSE across all models.
 ```
 
 *variable importance (for possibly reconsidering including some variables)*
@@ -483,7 +483,7 @@ low_ranked <- all_vimp %>%
 
 low_ranked
 
-# since the models are currently stable, i'm going to just keep all variables for now.
+# since the models are currently stable, just keeping all variables for now.
 
 ```
 
@@ -516,7 +516,7 @@ vif_prune <- function(train_df, response, preds, thresh = 5) {
 
     if (inherits(fit_lm, "try-error")) break
 
-    # Check for aliased (perfectly collinear) coefficients
+    # Check for aliased coefficients
     aliased <- names(coef(fit_lm))[is.na(coef(fit_lm))]
     if (length(aliased) > 0) {
       keep <- setdiff(keep, aliased)
@@ -549,7 +549,7 @@ make_cor_ar1 <- function(df, date_col = "Datetime", site_col = "Site") {
 
 *extra functions for running LME and evaluating VIF*
 ```{r}
-# --- helper to fit lme safely (avoids scoping issue with 'fixed' argument)
+#  helper to fit lme safely 
 fit_lme_safe <- function(fixed_formula, data, site_col, date_col) {
   do.call(nlme::lme, list(
     fixed       = fixed_formula,
@@ -562,7 +562,7 @@ fit_lme_safe <- function(fixed_formula, data, site_col, date_col) {
   ))
 }
 
-# --- safe VIF (long) utility used later to build the VIF log
+# safe VIF (long) utility used later to build the VIF log
 safe_vif_long <- function(df, response, preds) {
   preds <- unique(preds)
   preds <- preds[!is.na(preds)]
@@ -598,7 +598,6 @@ tidy_lme_fixed <- function(fit) {
   )
 }
 
-
 train_lme_global <- function(data,
                              response,
                              predictors,
@@ -607,15 +606,12 @@ train_lme_global <- function(data,
                              date_col = "Datetime",
                              vif_thresh = 5) {
 
-  # Keep only needed cols; drop rows with NA in response/preds
   base_df <- data %>%
     dplyr::select(all_of(c(site_col, date_col, response, predictors))) %>%
     tidyr::drop_na()
 
-  # Build weekly folds (your existing helper)
   folds <- make_weekly_folds(base_df, k = k, date_col = date_col)
 
-  # Storage
   oof_list <- vector("list", k)
   fold_kept_preds <- vector("list", k)
   fold_dropped_preds <- vector("list", k)
@@ -664,7 +660,7 @@ train_lme_global <- function(data,
   oof <- bind_rows(oof_list)
   mets <- compute_metrics(oof, truth_col = "obs", pred_col = "pred", site_col = "Site")
 
-  # Fit a final model on full data (with VIF pruning done on full data for reporting)
+  # Fit final model on full data (with VIF pruning done on full data for reporting)
   vp_full <- vif_prune(base_df, response, predictors, vif_thresh)
   kept_full    <- if (length(vp_full$keep) > 0) vp_full$keep else character(0)
   dropped_full <- vp_full$dropped
@@ -713,14 +709,14 @@ run_all_lme <- function(k = 5, vif_thresh = 5) {
   for (resp_key in c("max","mean","range")) {
     df <- switch(resp_key, max = max_df, mean = mean_df, range = range_df)
 
-    # --- Set A: All predictors (5 sites)
+    # Set A: All predictors (5 sites)
     A <- prep_dataset(df, resp_key, mode = "all")
     results[[paste(resp_key, "A_lme", sep = "_")]] <- train_lme_global(
       data = A$data, response = A$response, predictors = A$predictors,
       k = k, vif_thresh = vif_thresh
     )
 
-    # --- Set B: Remote-only (7 sites)
+    # Set B: Remote-only (7 sites)
     B <- prep_dataset(df, resp_key, mode = "remote")
     results[[paste(resp_key, "B_lme", sep = "_")]] <- train_lme_global(
       data = B$data, response = B$response, predictors = B$predictors,
@@ -771,12 +767,11 @@ readr::write_csv(fixed_effects_lme,  file.path(output_dir, "lme_fixed_effects.cs
 
 *VIF table*
 ```{r}
-# ---- helper: for each var in x, find the var in y most correlated with it ----
+# helper: for each var in x, find the var in y most correlated with it 
 most_corr_partner <- function(df, x_vars, y_vars, method = "pearson") {
   x_vars <- intersect(x_vars, names(df))
   y_vars <- intersect(y_vars, names(df))
   if (length(x_vars) == 0 || length(y_vars) == 0) {
-    # return empty tibble but with the expected columns
     return(tibble(predictor = character(), partner = character(), r = numeric()))
   }
   cors <- suppressWarnings(cor(df[, x_vars, drop = FALSE],
@@ -797,7 +792,7 @@ most_corr_partner <- function(df, x_vars, y_vars, method = "pearson") {
   })
 }
 
-# ---- Build ONE long VIF log file (before/after + dropped) ----
+# Build ONE long VIF log file (before/after + dropped) 
 vif_log_long <- purrr::imap_dfr(results_lme, function(res, model_id) {
   parts <- strsplit(model_id, "_", fixed = TRUE)[[1]]
   response <- parts[1]
@@ -839,11 +834,11 @@ vif_log_long <- purrr::imap_dfr(results_lme, function(res, model_id) {
                   partner_most_corr, r_with_partner, dropped)
 })
 
-# ---- Define output directory ----
+# Define output directory 
 output_dir <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/results"
 dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
 
-# ---- Save ----
+# Save
 readr::write_csv(
   vif_log_long,
   file.path(output_dir, "lme_vif_log_long.csv")
@@ -869,7 +864,6 @@ compute_cpi_tbl <- function(object, train_x, train_y, pred_fun, nsim = 20, ...) 
     n.repetitions = nsim
   )
 
-  # Use conditional perm only if this iml version supports it
   if ("conditional" %in% names(formals(iml::FeatureImp$new))) {
     args$conditional <- TRUE
   }
@@ -894,7 +888,7 @@ library(vip)
 
 options(vip.smaller_is_better = TRUE)
 
-# ---- metric + generic predict wrappers ----
+# metric + generic predict wrappers 
 rmse_loss <- function(truth, estimate) sqrt(mean((truth - estimate)^2, na.rm = TRUE))
 pred_wrap_caret <- function(object, newdata) predict(object, newdata = newdata)
 
@@ -906,7 +900,7 @@ make_lme_pred_wrapper <- function(level = 0) {
   }
 }
 
-# ---- reuse dataset builder to reconstruct training frames ----
+# reuse dataset builder to reconstruct training frames 
 # model_id for ML looks like "max_A_xgb" or "mean_B_rfr"
 get_train_frame <- function(model_id) {
   parts <- strsplit(model_id, "_", fixed = TRUE)[[1]]
@@ -929,10 +923,10 @@ cpi_vi_ml <- purrr::imap_dfr(results_refined, function(res, model_id) {
   train_x <- combo %>% dplyr::select(dplyr::all_of(td$predictors))
 
   vi_cpi <- compute_cpi_tbl(
-    object   = res$fit_object,              # caret::train
+    object   = res$fit_object,              
     train_x  = train_x,
     train_y  = train_y,
-    pred_fun = pred_wrap_caret,             # predict(object, newdata)
+    pred_fun = pred_wrap_caret,             
     nsim     = 20,
     sampler  = "copula"
   )
@@ -995,7 +989,7 @@ cpi_vi_lme <- purrr::imap_dfr(results_lme, function(res, model_id) {
 })
 
 
-# include internal importance for ML models (caret::varImp)
+# include internal importance for ML models 
 internal_vi_all <- purrr::imap_dfr(results_refined, function(res, model_id) {
   parts <- strsplit(model_id, "_", fixed = TRUE)[[1]]
   res$var_importance %>%
@@ -1018,7 +1012,7 @@ varimp_combined  <- dplyr::bind_rows(internal_vi_all, varimp_cpi_all)
 readr::write_csv(varimp_cpi_all, file.path(output_dir, "varimp_CPI_ALL_algorithms.csv"))
 readr::write_csv(varimp_combined, file.path(output_dir, "varimp_internal_vs_CPI_ALL_algorithms.csv"))
 
-# Quick peek: top 10 by permutation for each (response,set,alg)
+# top 10 by permutation for each (response,set,alg)
 varimp_cpi_all %>%
   dplyr::group_by(response, set, alg) %>%
   dplyr::slice_max(Importance, n = 10, with_ties = FALSE) %>%
@@ -1026,7 +1020,7 @@ varimp_cpi_all %>%
 ```
 
 ```{r}
-# --- add after building varimp_cpi_all, before plotting ---
+# add after building varimp_cpi_all, before plotting 
 
 # 1) Build permutation VI (with Stderr) for global models
 perm_vi_ml <- purrr::imap_dfr(results_refined, function(res, model_id) {
@@ -1146,7 +1140,7 @@ plot_df <- vi_A %>%
     var_key = paste0(response, "__", Variable)
   )
 
-# --- Build labels with * if the var was dropped by LME (Set A) ---
+# Build labels with * if the var was dropped by LME (Set A) 
 dropped_A <- vif_log_long %>%
   dplyr::filter(set == "A", stage == "dropped") %>%
   dplyr::mutate(
@@ -1166,7 +1160,7 @@ label_map <- plot_df %>%
   { setNames(.$lbl, .$var_key) }
 
 
-# 5) Optional cosmetic clamp for tiny negatives (noise near zero)
+# 5) Cosmetic clamp for tiny negatives (noise near zero)
 vi_eps <- 0.00  
 plot_df <- plot_df %>%
   mutate(Importance = ifelse(abs(Importance) < vi_eps, 0, Importance))

@@ -10,6 +10,11 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ```{r}
 library(readxl)
+library(tidyverse)
+library(stringr)
+library(dplyr)
+library(ggtext)
+
 corr_manual <- read_excel("~/corr_manual.xlsx")
 vi_all <- read_excel("~/vi_all.xlsx")
 ```
@@ -44,13 +49,7 @@ write_csv(
 ```
 
 ```{r}
-library(tidyverse)
-library(stringr)
-
-library(dplyr)
-library(stringr)
-
-## ---- helper functions (put these BEFORE the pipeline) -----------------
+## helper functions 
 
 extract_var <- function(v) {
   v <- tolower(v)
@@ -83,7 +82,7 @@ extract_lag <- function(v) {
   )
 }
 
-## ---- main plot_data object -------------------------------------------
+## main plot_data object
 
 plot_data <- combined_tbl %>%
   mutate(
@@ -186,8 +185,6 @@ plot_data <- combined_tbl %>%
 ```
 
 ```{r}
-library(ggtext)
-
 plot_metric_bubbles <- function(metric_label) {
 
   df <- plot_data %>%

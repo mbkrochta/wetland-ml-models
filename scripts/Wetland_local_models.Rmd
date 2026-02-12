@@ -1318,7 +1318,6 @@ readr::write_csv(
 # Permutation VI for ALL FINAL LOCAL MODELS
 # (XGB, RFR, GLS/AR1) -> one consolidated CSV
 library(vip)
-# NEW: add iml for CPI
 library(iml)
 
 set.seed(42)
@@ -1610,7 +1609,7 @@ OUT_FILE <- file.path(OUT_DIR, "varimp_perm_local_ALL_final.csv")
 readr::write_csv(varimp_perm_local_ALL_final, OUT_FILE)
 message("Wrote: ", OUT_FILE, "\nRows: ", nrow(varimp_perm_local_ALL_final))
 
-# NEW: Write CPI-only and merged CPI+Permutation
+# Write CPI-only and merged CPI+Permutation
 varimp_cpi_local_ALL_final <- bind_rows(vi_ml_cpi, vi_gls_cpi) %>%
   arrange(Site, Metric, Set, Model, desc(Importance))
 

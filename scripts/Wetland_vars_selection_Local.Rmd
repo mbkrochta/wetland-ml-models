@@ -59,7 +59,7 @@ find_best_predictors_site <- function(df_site, response_var) {
     vars <- intersect(predictor_groups[[gname]], names(df_site))
     if (length(vars) == 0) return(tibble(group = character(), predictor = character(), adj.r.squared = double()))
     
-    # Fit univariate LMs safely, skip if not enough data
+    # Fit univariate LMs 
     metrics <- vars %>%
       set_names() %>%
       map(~ {
@@ -92,7 +92,7 @@ remove_collinear_site <- function(df_site_model, response_var, threshold = cor_t
     dplyr::select(where(is.numeric)) %>%
     names()
 
-  # Drop ultra-sparse predictors (<3 non-NA obs cannot form reliable correlations)
+  # Drop sparse predictors (<3 non-NA obs cannot form reliable correlations)
   if (length(num_pred_names) == 0) {
     return(list(clean_df = df_site_model, removed = character(0)))
   }

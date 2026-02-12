@@ -50,7 +50,7 @@ If you use this code or dataset in your own research, please cite:
 
 
 
-Krochta, M. \& Chang, H. (In prep). Modeling thermal regimes of Pacific Northwest wetlands using machine learning. 
+Krochta, M., Chang, H., Zaret, K. (In prep). Modeling thermal regimes of Pacific Northwest wetlands using machine learning. 
 
 
 
@@ -60,5 +60,5 @@ Krochta, M. \& Chang, H. (In prep). Modeling thermal regimes of Pacific Northwes
 
 For questions or collaboration opportunities, contact:
 
-Michael Krochta – mkrochta@email.com
+Michael Krochta – mbkrochta@gmail.com
 

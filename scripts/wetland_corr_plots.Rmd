@@ -38,9 +38,7 @@ infer_site_from_name <- function(x, is_global = FALSE) {
 }
 
 # Helper: find the response column inside a dataframe robustly
-# Tries common patterns; falls back to best regex match.
 detect_response_col <- function(df, response_label) {
-  # common candidates (edit if yours differ)
   candidates_by_label <- list(
     "Max WT"   = c("Max_WT","max_WT","MaxWT","maxwt","Max","max"),
     "Mean WT"  = c("Mean_WT","mean_WT","MeanWT","meanwt","Mean","mean"),
@@ -48,18 +46,15 @@ detect_response_col <- function(df, response_label) {
   )
   cand <- candidates_by_label[[response_label]]
   if (is.null(cand)) cand <- character(0)
-
-  # exact or case-insensitive matches first
+  
   found <- intersect(cand, names(df))
   if (length(found) > 0) return(found[1])
 
-  # regex fallback by label keyword
   key <- tolower(str_replace(response_label, " WT", ""))
   rx  <- paste0("(?i)\\b", key, "\\b|^", key, "_|_", key, "$")
   m   <- names(df)[str_detect(names(df), rx)]
   if (length(m) > 0) return(m[1])
 
-  # absolute last-ditch: first numeric column
   num_cols <- names(df)[map_lgl(df, is.numeric)]
   if (length(num_cols) == 0) stop("No numeric columns found to use as response.")
   message("Could not confidently detect the response column; using: ", num_cols[1])
@@ -76,7 +71,7 @@ corr_from_file <- function(path, is_global = FALSE) {
 
   resp_col <- detect_response_col(df, resp_label)
 
-  # drop obvious non-predictor columns
+  # drop non-predictor columns
   drop_like <- c("date","day","time","datetime","site","id","station","objectid")
   keep_num <- df %>%
   dplyr::select(where(is.numeric)) %>%
@@ -116,7 +111,6 @@ global_files <- c(
 ) %>% keep(file.exists)
 
 local_files  <- list.files(data_dir_local, pattern = "_WT_model_data\\.csv$", full.names = TRUE)
-
 ```
 
 ```{r}
@@ -130,7 +124,7 @@ prefix_order <- c("WL","GWL","GWT","Water_area","Solar","Air","ppt","Elev","Size
 
 get_prefix <- function(x) {
   case_when(
-    str_starts(x, "GWL")        ~ "GWL",        # check longer first
+    str_starts(x, "GWL")        ~ "GWL",        
     str_starts(x, "GWT")        ~ "GWT",
     str_starts(x, "WL")         ~ "WL",
     str_starts(x, "Water_area") ~ "Water_area",
@@ -139,11 +133,11 @@ get_prefix <- function(x) {
     str_starts(x, "ppt")        ~ "ppt",
     str_starts(x, "Elev")       ~ "Elev",
     str_starts(x, "Size_km2")   ~ "Size_km2",
-    TRUE                        ~ "zzz"         # anything else to the bottom
+    TRUE                        ~ "zzz"        
   )
 }
 
-# Build global predictor level order once (group first, then name)
+# Build global predictor level order 
 pred_levels <- corr_all %>%
   mutate(.prefix = get_prefix(predictor),
          .pidx   = match(.prefix, prefix_order)) %>%
@@ -155,22 +149,19 @@ pred_levels <- corr_all %>%
 # Ensure consistent response column order
 corr_all <- corr_all %>%
   mutate(response = factor(response, levels = c("Mean WT","Max WT","Range WT")),
-         site     = factor(site))  # site order can be adjusted if you want
+         site     = factor(site)) 
 ```
 
 ```{r}
-# Plot: heatmaps per site (rows = predictors, columns = responses) ----
-# Order predictors within each site by decreasing |rho| averaged across responses
-# Ensure site order: Global first
+# Plot heatmaps per site 
 site_levels <- c("Global", sort(setdiff(unique(corr_all$site), "Global")))
 
 plot_df <- corr_all %>%
   filter(p < 0.05) %>%
   mutate(
     site      = factor(site, levels = site_levels),
-    predictor = factor(predictor, levels = pred_levels)  # fixed, cross-site
+    predictor = factor(predictor, levels = pred_levels)  
   )
-
 
 p <- ggplot(plot_df, aes(x = response, y = predictor, fill = rho)) +
   geom_tile() +
@@ -196,13 +187,13 @@ p <- ggplot(plot_df, aes(x = response, y = predictor, fill = rho)) +
     axis.text.x = element_text(angle = 45, hjust = 1),
     strip.text = element_text(face = "bold"),
     plot.title = element_text(face = "bold"),
-    legend.position = "bottom",              # legend underneath
-    legend.key.width = unit(2, "cm"),        # stretch keys
+    legend.position = "bottom",              
+    legend.key.width = unit(2, "cm"),       
     legend.title = element_text(face = "bold")
   ) +
   guides(fill = guide_colorbar(title.position = "top",
                                title.hjust = 0.5,
-                               barwidth = 20, barheight = 0.6))  # horizontal bar
+                               barwidth = 20, barheight = 0.6))  
 
 # Save
 out_path <- file.path(fig_dir, "spearman_corr_heatmaps_daily.png")
@@ -213,14 +204,14 @@ print(file.info(out_path)$mtime)
 
 *Corrplots for datasets to determine colinearity*
 ```{r}
-# ----- Packages -----
+#  Packages 
 library(tidyverse)
 library(readr)
 library(stringr)
 library(lubridate)
 library(ggcorrplot)
 
-# ----- Paths -----
+# Paths
 base_dir        <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models"
 data_dir_global <- file.path(base_dir, "data")
 data_dir_local  <- file.path(base_dir, "data", "local_mod_data")
@@ -228,29 +219,26 @@ fig_dir         <- file.path(base_dir, "figures", "corr_plots")
 
 dir.create(fig_dir, recursive = TRUE, showWarnings = FALSE)
 
-# ----- Settings -----
-COR_METHOD <- "pearson"   # or "spearman"
-DAILY_FUN  <- mean        # use mean for daily aggregation (switch to max if you prefer)
+# Settings
+COR_METHOD <- "pearson"   
+DAILY_FUN  <- mean        
 
-# ----- Helpers -----
+#  Helpers 
 
-# Try to extract a Date column from common date/time fields
+# Extract a Date column from common date/time fields
 detect_date_column <- function(df) {
   nms <- names(df)
 
-  # 1) Already a Date?
   if ("Date" %in% nms && inherits(df$Date, "Date")) return(df$Date)
 
-  # 2) String/number 'Date' that can be parsed
   if ("Date" %in% nms && !inherits(df$Date, "Date")) {
     d_try <- suppressWarnings(as.Date(df$Date))
     if (any(!is.na(d_try))) return(d_try)
-    # try common formats
+
     d_try2 <- suppressWarnings(parse_date_time(df$Date, orders = c("Y-m-d","m/d/Y","d/m/Y","Ymd")))
     if (any(!is.na(d_try2))) return(as.Date(d_try2))
   }
 
-  # 3) Datetime variants
   dt_names <- c("Datetime","DateTime","date_time","dateTime","timestamp","Timestamp")
   dt_col   <- dt_names[dt_names %in% nms]
   if (length(dt_col) > 0) {
@@ -262,30 +250,27 @@ detect_date_column <- function(df) {
     if (any(!is.na(dt_try))) return(as.Date(dt_try))
   }
 
-  # 4) Separate Date + Time columns → use Date
   if (all(c("Date","Time") %in% nms)) {
     d_try <- suppressWarnings(parse_date_time(paste(df$Date, df$Time),
                                               orders = c("Y-m-d H:M:S","m/d/Y H:M:S","m/d/Y H:M","Ymd HMS","Ymd HM")))
     if (any(!is.na(d_try))) return(as.Date(d_try))
   }
 
-  # 5) Looks like nothing usable
   return(NULL)
 }
 
 # Keep only predictor columns (numeric, no responses, no date/id-like)
 select_predictors <- function(df) {
-  # Numeric-ify softly
   df_num <- df %>% mutate(across(everything(), ~ suppressWarnings(as.numeric(.))))
 
-  # Drop obvious non-predictors by name
+  # Drop non-predictors 
   drop_name_pat <- "(?i)^(date|datetime|time|timestamp|id|objectid)$"
   df_num <- df_num %>% select(!matches(drop_name_pat))
 
   # Keep only numeric columns
   df_num <- df_num %>% select(where(is.numeric))
 
-  # Drop obvious response columns (WT / temperature variants)
+  # Drop response columns 
   resp_pat <- "(?i)(^|_)((mean|max|range).*(wt|temp|temperature)|(mmwt|mean_wt|max_wt|range_wt|mean_temp|max_temp|range_temp))($|_)"
   df_num <- df_num %>% select(!matches(resp_pat))
 
@@ -305,7 +290,6 @@ aggregate_predictors_daily <- function(df) {
   dcol <- detect_date_column(df)
   preds <- select_predictors(df)
 
-  # If no date detected, just return predictors as-is (hourly or whatever)
   if (is.null(dcol)) {
     message("  No date/datetime found → using raw rows (no daily aggregation).")
     return(preds)
@@ -331,7 +315,7 @@ aggregate_predictors_daily <- function(df) {
     { .[, keep_cols, drop = FALSE] }
 }
 
-# Build correlation matrix safely
+# Build correlation matrix 
 safe_cor <- function(df_pred, method = COR_METHOD) {
   if (ncol(df_pred) < 2) return(NULL)
   suppressWarnings(cor(df_pred, use = "pairwise.complete.obs", method = method))
@@ -344,7 +328,7 @@ process_one_file <- function(filepath) {
 
   df <- readr::read_csv(filepath, show_col_types = FALSE)
 
-  # ---- daily aggregation of predictors ----
+  # daily aggregation of predictors 
   preds_daily <- aggregate_predictors_daily(df)
 
   if (ncol(preds_daily) < 2) {
@@ -358,7 +342,7 @@ process_one_file <- function(filepath) {
     return(invisible(NULL))
   }
 
-  # Plot heatmap (upper triangle) with white background
+  # Plot heatmap 
   p <- ggcorrplot(
     cmat,
     hc.order = TRUE,
@@ -384,7 +368,7 @@ process_one_file <- function(filepath) {
   invisible(out_png)
 }
 
-# ----- Files to process -----
+# Files to process 
 global_files <- c(
   file.path(data_dir_global, "mean_global_data.csv"),
   file.path(data_dir_global, "max_global_data.csv")
@@ -402,7 +386,7 @@ if (length(all_files) == 0L) {
   stop("No CSV files found. Check the paths.")
 }
 
-# ----- Run -----
+# Run 
 walk(all_files, process_one_file)
 
 message(
@@ -410,8 +394,6 @@ message(
   "\nAggregation: daily ", deparse(substitute(DAILY_FUN)), " on predictor columns.",
   "\n(If no date field was found in a file, it falls back to raw rows.)"
 )
-
-
 
 ```
 

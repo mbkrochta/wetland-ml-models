@@ -14,15 +14,12 @@ knitr::opts_chunk$set(message = FALSE, warning = FALSE)
 library(tidyverse)
 library(broom)
 
-# -----------------------------
-# 1) Read data
-# -----------------------------
+
+# Read data
 df <- read.csv("C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/data/daily_wetlands_dataset.csv")
 
-# -----------------------------
-# 2) Columns to standardize (by Site), preserving names
+# Columns to standardize (by Site), preserving names
 #    Only WL* and GWL* are scaled. GWT* and Water_area_m2_3d are kept raw.
-# -----------------------------
 vars_to_scale <- c(
   # WL
   "WL_daily_mean","WL_daily_max","WL_daily_min","WL_daily_range",
@@ -50,17 +47,16 @@ z_by_site <- function(x) {
   }
 }
 
-# -----------------------------
-# 3) Standardize by Site (only WL* and GWL*; names unchanged)
-# -----------------------------
+
+# Standardize by Site (only WL* and GWL*; names unchanged)
+
 df_std <- df %>%
   group_by(Site) %>%
   mutate(across(all_of(vars_to_scale), z_by_site)) %>%
   ungroup()
 
-# -----------------------------
-# 4) Model setup
-# -----------------------------
+
+# Model setup
 responses <- c("mean_WT", "max_WT", "range_WT")
 
 predictor_groups <- list(
@@ -88,9 +84,8 @@ static_predictors <- c(
   "Elev_m", "Size_km2"
 )
 
-# -----------------------------
-# 5) Variable selection on standardized data
-# -----------------------------
+
+# Variable selection on standardized data
 find_best_predictors <- function(response_var) {
   results <- map_df(predictor_groups, function(vars) {
     existing <- intersect(vars, names(df_std))
@@ -111,9 +106,8 @@ names(best_predictors_all) <- responses
 
 combined_predictor_lists <- map(best_predictors_all, ~ unique(c(.x$predictor, static_predictors)))
 
-# -----------------------------
-# 6) Build model datasets (keep Site, Datetime, response)
-# -----------------------------
+
+# Build model datasets (keep Site, Datetime, response)
 model_data <- map2(combined_predictor_lists, responses, function(vars, response) {
   df_std %>% select(any_of(c("Site", "Datetime", response, vars)))
 })
@@ -161,15 +155,14 @@ remove_correlated_predictors <- function(df, response, threshold = cor_threshold
 # Apply to each model dataset
 model_data_uncorrelated <- map2(model_data, responses, remove_correlated_predictors)
 
-# Name the list elements
+# Name list elements
 names(model_data_uncorrelated) <- responses
 
-# You now have:
 mean_model_final  <- model_data_uncorrelated$mean_WT
 max_model_final   <- model_data_uncorrelated$max_WT
 range_model_final <- model_data_uncorrelated$range_WT
 
-# Optional: check which variables were removed
+# check which variables were removed
 removed_vars <- map2(model_data, model_data_uncorrelated, function(orig, cleaned) {
   setdiff(names(orig), names(cleaned))
 })

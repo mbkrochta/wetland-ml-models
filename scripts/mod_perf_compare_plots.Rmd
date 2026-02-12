@@ -8,12 +8,11 @@ output: html_document
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
+library(ggh4x)
 ```
 
 *global boxplots (maybe don't need)*
 ```{r}
-library(tidyverse)
-
 # Paths
 perf_dir <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/results/model_performance"
 fig_dir  <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/figures"
@@ -58,15 +57,12 @@ plot_save_set("B")
 
 *Global models and local models compare plot (use this one)*
 ```{r}
-library(tidyverse)
-library(ggh4x)
-
-# --- Paths ---
+# Paths 
 perf_global_dir <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/results/model_performance"
 perf_local_dir  <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/results/local_results"
 fig_dir         <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/figures"
 
-# ---------- GLOBAL (overall) ----------
+# GLOBAL (overall) 
 g_ml  <- readr::read_csv(file.path(perf_global_dir, "metrics_overall.csv"),      show_col_types = FALSE)
 g_gls <- readr::read_csv(file.path(perf_global_dir, "lme_metrics_overall.csv"), show_col_types = FALSE)
 
@@ -91,7 +87,7 @@ glob_all <- bind_rows(
     set = toupper(set)
   )
 
-# ---------- LOCAL (by site, Set A/B) ----------
+#  LOCAL (by site, Set A/B)
 loc_ml  <- readr::read_csv(file.path(perf_local_dir, "local_models_final.csv"), show_col_types = FALSE)
 loc_gls <- readr::read_csv(file.path(perf_local_dir, "gls_metrics_local.csv"),  show_col_types = FALSE)
 
@@ -110,7 +106,7 @@ loc_all <- bind_rows(
     set = toupper(set)
   )
 
-# ----- Shared y-limits (per response) across Set A & B -----
+# Shared y-limits (per response) across Set A & B 
 alg_levels <- c("GLS","RFR","XGB")
 
 ylims_by_resp <- bind_rows(
@@ -135,7 +131,7 @@ ylims_df <- dplyr::left_join(grid, ylims_by_resp, by = "response") %>%
 
 
 
-# ---------- Plot function (one set at a time) ----------
+#  Plot function (one set at a time) 
 plot_local_vs_global <- function(set_letter = "A") {
   dd_local <- loc_all %>% filter(set == set_letter)
   dd_glob  <- glob_all %>% filter(set == set_letter)
@@ -208,11 +204,9 @@ p <- ggplot() +
 # Make both figures
 plot_local_vs_global("A")
 plot_local_vs_global("B")
-
-
 ```
 ```{r}
-# --- Collapse GLS/LME into LM + set factor levels --------------------------------
+# Collapse GLS/LME into LM + set factor levels 
 alg_levels <- c("LM", "RFR", "XGB")
 
 glob_all <- glob_all %>%
@@ -221,7 +215,6 @@ glob_all <- glob_all %>%
     alg = factor(alg, levels = alg_levels),
     set = factor(set, levels = c("A","B"), labels = c("Full","Partial"))
   ) %>%
-  # If both GLS and LME existed for the same grouping, merge after recode
   group_by(response, set, alg) %>%
   summarize(RMSE = mean(RMSE, na.rm = TRUE), .groups = "drop")
 
@@ -234,7 +227,7 @@ loc_all <- loc_all %>%
   group_by(Site, response, set, alg) %>%
   summarize(RMSE = mean(RMSE, na.rm = TRUE), .groups = "drop")
 
-# --- Rebuild y-limits df with Full/Partial (prevents NA facet rows) --------------
+#  Rebuild y-limits df with Full/Partial  
 ylims_df <- tidyr::expand_grid(
   response = unique(ylims_by_resp$response),
   alg      = factor(alg_levels, levels = alg_levels),
@@ -243,13 +236,13 @@ ylims_df <- tidyr::expand_grid(
   dplyr::left_join(ylims_by_resp, by = "response") %>%
   tidyr::pivot_longer(c(ymin, ymax), names_to = "which", values_to = "RMSE")
 
-# --- Site palette (all 7) -------------------------------------------------------
+# Site palette (all 7)
 site_pal <- c(
   Anvil = "#E67E80", Butte = "#8AADF4", Cooper = "#A6D189",
   Crater = "#C6A0F6", Hideaway = "#7DC4E4", Pint = "#E5C890", Sam = "#F4B8E4"
 )
 
-# --- Combined plot (two rows = Full/Partial; three columns = responses) ----------
+# Combined plot (two rows = Full/Partial; three columns = responses) 
 p_combined <- ggplot() +
   # pin shared per-response baseline/max
   geom_blank(data = ylims_df, aes(x = alg, y = RMSE)) +
@@ -313,7 +306,7 @@ p_combined <- ggplot() +
     panel.grid.minor = element_blank()
   )
 
-# --- Save -----------------------------------------------------------------------
+#  Save
 outfile <- file.path(fig_dir, "local_vs_global_RMSE_Combined_Full_Partial.png")
 ggsave(outfile, p_combined, width = 11, height = 10, dpi = 300, bg = "white")
 message("Saved: ", outfile)
@@ -321,14 +314,14 @@ message("Saved: ", outfile)
 ```
 
 
-*Plotting GLOBAL site-level metrics with global models (probably for interpretation only)*
+*Plotting GLOBAL site-level metrics with global models (interpretation only)*
 ```{r}
-# --- Paths ---
+# Paths 
 perf_global_dir <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/results/model_performance"
 perf_local_dir  <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/results/model_performance"
 fig_dir         <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/figures"
 
-# ---------- GLOBAL (overall) ----------
+#  GLOBAL 
 g_ml  <- readr::read_csv(file.path(perf_global_dir, "metrics_overall.csv"),      show_col_types = FALSE)
 g_gls <- readr::read_csv(file.path(perf_global_dir, "lme_metrics_overall.csv"), show_col_types = FALSE)
 
@@ -353,7 +346,7 @@ glob_all <- bind_rows(
     set = toupper(set)
   )
 
-# ---------- GLOBAL LOCAL (by site, Set A/B) ----------
+# GLOBAL LOCAL 
 loc_ml  <- readr::read_csv(file.path(perf_local_dir, "metrics_by_site.csv"), show_col_types = FALSE)
 loc_gls <- readr::read_csv(file.path(perf_local_dir, "lme_metrics_by_site.csv"),  show_col_types = FALSE)
 
@@ -372,12 +365,12 @@ loc_all <- bind_rows(
     set = toupper(set)
   )
 
-# ---------- Plot function (one set at a time) ----------
+# Plot function 
 plot_local_vs_global <- function(set_letter = "A") {
   dd_local <- loc_all %>% filter(set == set_letter)
   dd_glob  <- glob_all %>% filter(set == set_letter)
 
-  # manual site palette for stability (optional)
+  # manual site palette for stability 
   site_pal <- c(
     Anvil   = "#E67E80", Butte   = "#8AADF4", Cooper = "#A6D189",
     Crater  = "#C6A0F6", Hideaway= "#7DC4E4", Pint   = "#E5C890", Sam = "#F4B8E4"
@@ -387,7 +380,7 @@ plot_local_vs_global <- function(set_letter = "A") {
   site_pal <- site_pal[names(site_pal) %in% site_levels]
 
   p <- ggplot() +
-    # Local, by site (colored lines + solid points)
+    # Local, by site 
     geom_line(
       data = dd_local,
       aes(x = alg, y = RMSE, group = Site, color = Site),
@@ -398,15 +391,12 @@ plot_local_vs_global <- function(set_letter = "A") {
       aes(x = alg, y = RMSE, color = Site),
       size = 2.4, alpha = 1, 
     ) +
-    # Global overall (black dashed line + hollow point, with its own legend key)
-    # Option A: group by response (since you facet by response)
+    # Global overall 
 geom_line(
   data = dd_glob,
   aes(x = alg, y = RMSE, group = response, linetype = "Global (overall)"),
   color = "black", linewidth = 0.9
 ) +
-
-     
     geom_point(
       data = dd_glob,
       aes(x = alg, y = RMSE, shape = "Global (overall)"),
@@ -417,7 +407,6 @@ geom_line(
     scale_linetype_manual(values = c("Global (overall)" = "dashed")) +
     scale_shape_manual(values = c("Global (overall)" = 21)) +
     guides(
-      # We only want ONE small legend key for the global reference:
       linetype = "none",
       shape = guide_legend(
         title = NULL,
