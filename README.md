@@ -16,10 +16,6 @@ This repository contains scripts, data structures, and model outputs used to ana
 
 \- `figures/` – Plots, diagrams, and visualizations
 
-\- `models/` – Saved model objects (e.g., .rds, .pkl)
-
-\- `notebooks/` – Jupyter or R Markdown notebooks for exploratory and model development work
-
 \- `results/` – Model output summaries and evaluation metrics
 
 \- `scripts/` – Core R or Python scripts for preprocessing, modeling, and analysis
