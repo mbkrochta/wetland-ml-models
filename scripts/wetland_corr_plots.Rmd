@@ -20,7 +20,7 @@ fig_dir         <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/figures"
 ```
 
 ```{r}
-# Helper: infer response label from filename ("Max WT", "Mean WT", "Range WT")
+# Get response label from filename ("Max WT", "Mean WT", "Range WT")
 infer_response_from_name <- function(x) {
   x_low <- tolower(x)
   if (str_detect(x_low, "max"))   return("Max WT")
@@ -29,7 +29,7 @@ infer_response_from_name <- function(x) {
   return("Response")
 }
 
-# Helper: infer site from filename (first token before '_' for locals; 'Global' for globals)
+# Get site from filename (first token before '_' for locals; 'Global' for globals)
 infer_site_from_name <- function(x, is_global = FALSE) {
   if (is_global) return("Global")
   nm <- basename(x)
@@ -37,7 +37,7 @@ infer_site_from_name <- function(x, is_global = FALSE) {
   str_to_title(site)
 }
 
-# Helper: find the response column inside a dataframe robustly
+# Find the response column inside a dataframe robustly
 detect_response_col <- function(df, response_label) {
   candidates_by_label <- list(
     "Max WT"   = c("Max_WT","max_WT","MaxWT","maxwt","Max","max"),
@@ -222,8 +222,6 @@ dir.create(fig_dir, recursive = TRUE, showWarnings = FALSE)
 # Settings
 COR_METHOD <- "pearson"   
 DAILY_FUN  <- mean        
-
-#  Helpers 
 
 # Extract a Date column from common date/time fields
 detect_date_column <- function(df) {

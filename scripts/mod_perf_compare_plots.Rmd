@@ -11,7 +11,7 @@ library(tidyverse)
 library(ggh4x)
 ```
 
-*global boxplots (maybe don't need)*
+*global boxplots (not used in MS)*
 ```{r}
 # Paths
 perf_dir <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/results/model_performance"
@@ -55,7 +55,7 @@ plot_save_set("B")
 
 ```
 
-*Global models and local models compare plot (use this one)*
+*Global models and local models compare plot (used in MS)*
 ```{r}
 # Paths 
 perf_global_dir <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/results/model_performance"
