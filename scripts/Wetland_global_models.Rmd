@@ -1206,7 +1206,7 @@ ggsave("C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/figures/varimp_globa
 resp_lab <- c(max = "Max WT", mean = "Mean WT", range = "Range WT")
 alg_lab  <- c(lme = "LME", rfr = "RFR", xgb = "XGB")
 
-# 1) Gather OOF predictions from your stored objects:
+# Gather OOF predictions from your stored objects:
 #    - results_refined: contains *_A_rfr and *_A_xgb
 #    - results_lme:     contains *_A_lme
 collect_oof_setA <- function(results_refined, results_lme) {
@@ -1275,10 +1275,10 @@ make_panel <- function(dat, resp_label, show_strips = TRUE) {
   pad      <- diff(lims_raw) * 0.04
   lims     <- c(lims_raw[1] - pad, lims_raw[2] + pad)
 
-  # Integer ticks (same count-ish across responses)
+  # Integer ticks 
   brk <- int_breaks(lims, target = 6L)
 
-  # Per-facet 1:1 (so it ALWAYS draws, and appears in the legend)
+  # 1:1 
   ones <- dd %>%
     distinct(alg) %>%
     mutate(slope = 1, intercept = 0)
@@ -1290,7 +1290,7 @@ make_panel <- function(dat, resp_label, show_strips = TRUE) {
     geom_abline(
       data = ones,
       aes(slope = slope, intercept = intercept, linetype = "1:1"),
-      linewidth = 0.8, alpha = 0.95, inherit.aes = FALSE
+      linewidth = 0.8, alpha = 0.95
     ) +
     geom_smooth(aes(linetype = "Fitted"), method = "lm", se = FALSE,
             color = "#222222", linewidth = 1.0, alpha = 1.0) +
