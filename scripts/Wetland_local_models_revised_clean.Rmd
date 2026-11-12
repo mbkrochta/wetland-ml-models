@@ -1,0 +1,695 @@
+---
+title: "Wetland local models — revised"
+author: "Michael Krochta"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+## Setup
+
+Models use the original daily dataset, with temporal predictor selection repeated within each outer training fold. Set A includes available field measurements; Set B excludes them.
+
+```{r setup}
+knitr::opts_chunk$set(echo = TRUE, message = TRUE)
+library(dplyr)
+library(tidyr)
+library(tibble)
+library(lubridate)
+library(mgcv)
+library(caret)
+library(ranger)
+library(xgboost)
+library(nlme)
+library(car)
+library(purrr)
+library(readr)
+library(ggplot2)
+library(iml)
+
+# Keep laptop resource usage predictable: no parallel workers, one thread/model.
+Sys.setenv(OMP_NUM_THREADS = "1", OPENBLAS_NUM_THREADS = "1", MKL_NUM_THREADS = "1")
+set.seed(42)
+
+data_path <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/data/daily_wetlands_dataset.csv"
+ml_dir    <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/results/local_results"
+gls_dir   <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/results/local_lme_results"
+fig_dir   <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/figures"
+data_dir  <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/data/local_mod_data"
+dir.create(ml_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(gls_dir, recursive = TRUE, showWarnings = FALSE)
+
+# Start with one site for a short end-to-end smoke test; use NULL for all sites.
+test_site <- NULL
+# Conservative tuning by default. Change to TRUE for the broader original grids.
+full_tuning <- FALSE
+run_models <- TRUE          # FALSE to regenerate tables/figures from saved fits
+run_importance <- TRUE     # enable after successful model fitting
+importance_repetitions <- 20
+resume_completed <- TRUE
+```
+
+## GAM temporal selection
+
+```{r selection}
+predictor_groups <- list(
+  Solar    = c("Solar_daily", "Solar_2d", "Solar_3d", "Solar_7d"),
+  WL_mean  = c("WL_daily_mean", "WL_mean_2day", "WL_mean_3day", "WL_mean_7day"),
+  WL_max   = c("WL_daily_max", "WL_max_2day", "WL_max_3day", "WL_max_7day"),
+  WL_min   = c("WL_daily_min", "WL_min_2day", "WL_min_3day", "WL_min_7day"),
+  Air_tmean= c("Air_tmean", "Air_tmean_2day", "Air_tmean_3day", "Air_tmean_7day"),
+  Air_tmax = c("Air_tmax", "Air_tmax_2day", "Air_tmax_3day", "Air_tmax_7day"),
+  Air_tmin = c("Air_tmin", "Air_tmin_2day", "Air_tmin_3day", "Air_tmin_7day"),
+  GWT_mean = c("GWT_mean", "GWT_mean_2day", "GWT_mean_3day", "GWT_mean_7day"),
+  GWT_max  = c("GWT_max", "GWT_max_2day", "GWT_max_3day", "GWT_max_7day"),
+  GWT_min  = c("GWT_min", "GWT_min_2day", "GWT_min_3day", "GWT_min_7day"),
+  GWL_mean = c("GWL_mean", "GWL_mean_2day", "GWL_mean_3day", "GWL_mean_7day"),
+  GWL_max  = c("GWL_max", "GWL_max_2day", "GWL_max_3day", "GWL_max_7day"),
+  GWL_min  = c("GWL_min", "GWL_min_2day", "GWL_min_3day", "GWL_min_7day"),
+  ppt      = c("ppt", "ppt_7day")
+)
+
+# Retain site-varying non-temporal predictors; exclude between-site constants
+# (Elev_m, Size_km2) from LOCAL models.
+static_predictors <- c(
+  "Air_trange", "WL_daily_range", "GWT_range", "GWL_range",
+  "Water_area_m2_3d"
+)
+
+# Local models operate within one site, so within-site WL/GWL z-scoring
+# does not change the information in these predictors. Keep original values
+# to preserve the local model data scale used by the original script.
+
+make_gam_weekly_folds <- function(data, k = 5, seed = 42) {
+  week_id <- lubridate::floor_date(as.Date(data$Datetime),
+                                   unit = "week", week_start = 1)
+  weeks <- unique(week_id)
+  if (length(weeks) < k) {
+    stop("Not enough distinct weeks for ", k, "-fold GAM CV (found ",
+         length(weeks), ").")
+  }
+  set.seed(seed)
+  weeks <- sample(weeks)
+  week_groups <- split(weeks, rep(seq_len(k), length.out = length(weeks)))
+  lapply(week_groups, function(w) which(week_id %in% w))
+}
+
+select_gam_predictors_site <- function(train_data, response_var,
+                                       k_folds = 5, seed = 42) {
+  stopifnot(length(unique(stats::na.omit(train_data$Site))) == 1)
+  if (!response_var %in% names(train_data)) stop("Missing response: ", response_var)
+
+  purrr::imap_dfr(predictor_groups, function(vars, group_name) {
+    existing <- intersect(vars, names(train_data))
+    if (!length(existing)) return(tibble::tibble())
+
+    # Remove candidates with no variability or insufficient observations.
+    # Complete cases are shared by all remaining candidates for fair comparison.
+    repeat {
+      common <- train_data %>%
+        dplyr::select(dplyr::all_of(c("Datetime", response_var, existing))) %>%
+        tidyr::drop_na()
+      if (!length(existing) || nrow(common) < 10) break
+      eligible <- vapply(existing, function(v) {
+        is.numeric(common[[v]]) &&
+          length(unique(common[[v]])) >= 2
+      }, logical(1))
+      if (all(eligible)) break
+      existing <- existing[eligible]
+    }
+    if (!length(existing) || nrow(common) < 10) {
+      warning("Skipping group ", group_name, " for ", response_var,
+              ": insufficient complete observations or variation.")
+      return(tibble::tibble())
+    }
+    if (length(unique(lubridate::floor_date(common$Datetime,
+                 unit = "week", week_start = 1))) < k_folds) {
+      warning("Skipping group ", group_name, " for ", response_var,
+              ": fewer than ", k_folds, " distinct weeks.")
+      return(tibble::tibble())
+    }
+
+    folds <- make_gam_weekly_folds(common, k = k_folds, seed = seed)
+    scores <- purrr::map_dfr(existing, function(v) {
+      predictions <- rep(NA_real_, nrow(common))
+      for (holdout in folds) {
+        training <- common[-holdout, , drop = FALSE]
+        n_unique <- length(unique(training[[v]]))
+        # Use k=5 where possible; otherwise use a linear term.
+        form <- if (n_unique >= 5) {
+          stats::as.formula(paste0(response_var, " ~ s(`", v, "`, k = 5)"))
+        } else {
+          stats::reformulate(v, response = response_var)
+        }
+        fit <- mgcv::gam(form, data = training, method = "REML")
+        predictions[holdout] <- as.numeric(stats::predict(
+          fit, newdata = common[holdout, , drop = FALSE]
+        ))
+      }
+      tibble::tibble(predictor = v,
+                     cv_rmse = sqrt(mean((common[[response_var]] - predictions)^2)))
+    })
+    scores %>%
+      dplyr::arrange(cv_rmse, match(predictor, existing)) %>%
+      dplyr::slice(1) %>%
+      dplyr::mutate(group = group_name, n = nrow(common), .before = 1)
+  })
+}
+
+# Helper to use from the local MODELING script inside EACH outer training fold.
+# This does not use observations outside the supplied train_data.
+select_for_local_site <- function(train_data, response_var, k = 5, seed = 42, mode = "A") {
+  # Screen only eligible groups for each predictor set (avoids B screening field variables).
+  groups_old <- predictor_groups
+  if (mode == "B") {
+    eligible_groups <- lapply(predictor_groups, function(x) x[remote_ok(x)])
+    eligible_groups <- Filter(length, eligible_groups)
+  } else eligible_groups <- predictor_groups
+  # Local temporary binding via function environment, without changing global groups.
+  selector <- select_gam_predictors_site
+  environment(selector) <- list2env(list(predictor_groups=eligible_groups), parent=environment(select_gam_predictors_site))
+  selection <- selector(train_data, response_var,
+                        k_folds = k, seed = seed)
+  statics <- intersect(static_predictors, names(train_data))
+  if (mode == "B") statics <- statics[remote_ok(statics)]
+  statics <- statics[vapply(statics, function(v) {
+    x <- train_data[[v]]
+    is.numeric(x) && length(unique(x[is.finite(x)])) >= 2
+  }, logical(1))]
+  list(predictors = unique(c(selection$predictor, statics)),
+       selection = selection)
+}
+```
+
+## Weekly outer folds and model helpers
+
+```{r helpers}
+remote_prefix <- c("WL_", "GWT_", "GWL_", "Water")
+remote_ok <- function(p) !vapply(p, function(x) any(startsWith(x, remote_prefix)), logical(1))
+
+make_weekly_folds <- function(df, k = 5, seed = 42) {
+  wk <- floor_date(df$Datetime, "week", week_start = 1)
+  u <- sort(unique(wk))
+  if (length(u) < k) stop("Too few weeks for CV")
+  set.seed(seed)
+  u <- sample(u)
+  groups <- split(u, rep(seq_len(k), length.out = length(u)))
+  lapply(groups, function(g) which(wk %in% g))
+}
+
+score_oof <- function(x) {
+  x <- x[is.finite(x$obs) & is.finite(x$pred), , drop = FALSE]
+  if (nrow(x) < 3) return(tibble(RMSE=NA_real_, MAE=NA_real_, R2=NA_real_, NSE=NA_real_, n_oof=nrow(x)))
+  tibble(RMSE=sqrt(mean((x$obs-x$pred)^2)), MAE=mean(abs(x$obs-x$pred)),
+         R2=if (sum((x$obs-mean(x$obs))^2)>0) 1-sum((x$obs-x$pred)^2)/sum((x$obs-mean(x$obs))^2) else NA_real_,
+         NSE=if (sum((x$obs-mean(x$obs))^2)>0) 1-sum((x$obs-x$pred)^2)/sum((x$obs-mean(x$obs))^2) else NA_real_, n_oof=nrow(x))
+}
+
+vif_prune <- function(dat, response, predictors, limit = 5) {
+  keep <- predictors
+  removed <- character()
+  repeat {
+    if (!length(keep)) break
+    nonconstant <- vapply(keep, function(v) sd(dat[[v]]) > 0, logical(1))
+    if (any(!nonconstant)) {
+      removed <- c(removed, keep[!nonconstant]); keep <- keep[nonconstant]
+    }
+    if (length(keep) <= 1) break
+    fit <- lm(reformulate(keep, response), data=dat)
+    alias <- intersect(names(coef(fit))[is.na(coef(fit))], keep)
+    if (length(alias)) {
+      keep <- setdiff(keep, alias); removed <- c(removed, alias); next
+    }
+    v <- tryCatch(car::vif(fit), error=function(e) NULL)
+    if (is.null(v)) stop("Could not compute VIF; inspect predictors")
+    if (is.matrix(v)) stop("Unexpected GVIF matrix for numeric predictors")
+    if (max(v) <= limit) break
+    bad <- names(which.max(v))
+    removed <- c(removed, bad); keep <- setdiff(keep, bad)
+  }
+  list(keep=keep, dropped=unique(removed))
+}
+
+# 8 XGB candidates vs the original 288-candidate grid; bounded threads and rounds.
+xgb_grid <- if (full_tuning) expand.grid(
+  nrounds=c(400,800), eta=c(.05,.1), max_depth=c(6,9,12),
+  min_child_weight=c(1,4), subsample=c(.8,.9),
+  colsample_bytree=c(.8,1), gamma=c(0,.1,1)
+) else expand.grid(
+  nrounds=c(150,300), eta=c(.05,.1), max_depth=c(3,6),
+  min_child_weight=2, subsample=.8, colsample_bytree=.8, gamma=0
+)
+rf_grid <- function(p) {
+  if (full_tuning) {
+    m <- unique(pmax(1, pmin(p, c(floor(sqrt(p))-1, floor(sqrt(p)),
+                  floor(sqrt(p))+1, floor(p/4), floor(p/3), floor(p/2), ceiling(2*p/3)))))
+    nodes <- c(1,2,3,5,7,10,15)
+  } else {
+    m <- unique(pmax(1, pmin(p, c(floor(sqrt(p)), floor(p/3), floor(p/2)))))
+    nodes <- c(3,7)
+  }
+  expand.grid(mtry=sort(m), splitrule="variance", min.node.size=nodes)
+}
+
+fit_ml <- function(tr, va, response, preds, alg, seed=42) {
+  tr <- tr[complete.cases(tr[,c("Datetime",response,preds),drop=FALSE]),,drop=FALSE]
+  va <- va[complete.cases(va[,c("Datetime",response,preds),drop=FALSE]),,drop=FALSE]
+  if (nrow(tr)<30 || !nrow(va) || !length(preds)) stop("Insufficient model data")
+  inner <- make_weekly_folds(tr, k=5, seed=seed)
+  idx_out <- inner
+  idx <- lapply(inner, function(i) setdiff(seq_len(nrow(tr)), i))
+  ctrl <- caret::trainControl(method="cv", number=5, index=idx, indexOut=idx_out,
+                              allowParallel=FALSE, savePredictions="none")
+  grid <- if (alg=="rfr") rf_grid(length(preds)) else xgb_grid
+  args <- list(x=tr[,preds,drop=FALSE], y=tr[[response]],
+               method=if (alg=="rfr") "ranger" else "xgbTree",
+               trControl=ctrl, tuneGrid=grid, metric="RMSE")
+  if (alg=="rfr") {
+    args <- c(args,list(num.trees=500, num.threads=1, importance="permutation"))
+  } else args <- c(args,list(nthread=1, verbose=0))
+  set.seed(seed)
+  fit <- do.call(caret::train, args)
+  oof <- tibble(Site=va$Site, Date=va$Datetime, obs=va[[response]],
+                pred=as.numeric(predict(fit,newdata=va[,preds,drop=FALSE])))
+  list(fit=fit, oof=oof)
+}
+
+fit_gls <- function(tr, va, response, preds) {
+  tr <- tr[complete.cases(tr[,c("Datetime",response,preds),drop=FALSE]),,drop=FALSE]
+  if (nrow(tr)<30) stop("Insufficient GLS data")
+  vp <- vif_prune(tr, response, preds, limit=5)
+  kept <- vp$keep
+  form <- reformulate(kept, response=response)
+  tr <- tr[order(tr$Datetime),,drop=FALSE]
+  tr$.day_index <- as.integer(tr$Datetime - min(tr$Datetime))
+  fit <- nlme::gls(form, data=tr, method="REML",
+                   correlation=nlme::corAR1(form=~.day_index),
+                   control=nlme::glsControl(msMaxIter=200))
+  va <- va[complete.cases(va[,c("Datetime",response,kept),drop=FALSE]),,drop=FALSE]
+  va$.day_index <- as.integer(va$Datetime - min(tr$Datetime))
+  oof <- tibble(Site=va$Site, Date=va$Datetime, obs=va[[response]],
+                pred=as.numeric(predict(fit,newdata=va)))
+  list(fit=fit, oof=oof, kept=kept, dropped=vp$dropped)
+}
+```
+
+## Model fitting
+
+**Important:** Each outer test fold is completely excluded from GAM selection, VIF filtering, model tuning, and model fitting. GAM screening within the outer training data uses its own five weekly folds. Inner caret folds tune ML hyperparameters; as in the revised global workflow, GAM selection is *not* repeated within every inner tuning fold. Missing values are left untouched in the raw data and excluded only where needed for a particular fit/prediction.
+
+```{r run_models}
+raw <- read.csv(data_path, stringsAsFactors=FALSE)
+raw$Datetime <- as.Date(raw$Datetime, tryFormats=c("%m/%d/%Y","%Y-%m-%d"))
+stopifnot(!anyNA(raw$Datetime), all(c("Site","mean_WT","max_WT","range_WT") %in% names(raw)))
+raw <- raw[order(raw$Site,raw$Datetime),,drop=FALSE]
+if (!is.null(test_site)) raw <- raw[raw$Site==test_site,,drop=FALSE]
+
+run_one <- function(dat, response, site, metric) {
+  dat <- dat[!is.na(dat[[response]]),,drop=FALSE]
+  folds <- make_weekly_folds(dat, k=5)
+  fold_records <- list(); selection_log <- list(); vif_log <- list()
+  algorithms <- c("rfr","xgb","gls")
+  modes <- c("A","B")
+  for (j in seq_along(folds)) {
+    tr <- dat[-folds[[j]],,drop=FALSE]
+    va <- dat[folds[[j]],,drop=FALSE]
+    for (mode in modes) {
+      selected <- select_for_local_site(tr,response,k=5,mode=mode)
+      preds <- selected$predictors
+      if (!length(preds)) next
+      sl <- selected$selection
+      selection_log[[length(selection_log)+1L]] <- mutate(sl,Site=site,Metric=metric,Set=mode,fold=j,.before=1)
+      for (alg in algorithms) {
+        key <- paste(site,metric,mode,alg,sep="_")
+        message("  ",key," | outer fold ",j,"/5")
+        res <- if (alg=="gls") fit_gls(tr,va,response,preds) else fit_ml(tr,va,response,preds,alg)
+        res$oof$fold <- j
+        fold_records[[key]][[j]] <- res$oof
+        if (alg=="gls") vif_log[[length(vif_log)+1L]] <- tibble(Site=site,Metric=metric,Set=mode,fold=j,
+             kept=paste(res$kept,collapse="; "), dropped=paste(res$dropped,collapse="; "))
+        rm(res); gc(verbose=FALSE)
+      }
+    }
+  }
+  # Final full-data selection and fits, separately for each predictor set.
+  final <- list(); summary <- list()
+  for (mode in modes) {
+    chosen <- select_for_local_site(dat,response,k=5,mode=mode)
+    preds <- chosen$predictors
+    if (!length(preds)) next
+    for (alg in algorithms) {
+      key <- paste(site,metric,mode,alg,sep="_")
+      oof <- dplyr::bind_rows(fold_records[[key]])
+      if (alg=="gls") {
+        # Full-data GLS: no test set required; reuse training data as placeholder.
+        res <- fit_gls(dat,dat,response,preds)
+        fit <- res$fit; final_preds <- res$kept
+      } else {
+        res <- fit_ml(dat,dat,response,preds,alg)
+        fit <- res$fit; final_preds <- preds
+      }
+      final[[key]] <- list(response=response, model_type=alg,
+         predictors=final_preds, predictors_init=preds,
+         best_params=if(alg=="gls") NULL else fit$bestTune,
+         fit_object=fit, oof_predictions=oof, metrics_overall=score_oof(oof),
+         selection_full=chosen$selection,
+         var_importance=if(alg=="gls") NULL else tryCatch(caret::varImp(fit)$importance,error=function(e) NULL))
+      summary[[key]] <- mutate(score_oof(oof), Site=site,Metric=metric,Set=mode,Model=toupper(alg),
+                               n_predictors=length(final_preds),.before=1)
+      rm(res,fit); gc(verbose=FALSE)
+    }
+  }
+  list(models=final, summary=dplyr::bind_rows(summary),
+       selections=dplyr::bind_rows(selection_log),vif=dplyr::bind_rows(vif_log))
+}
+
+sites <- sort(unique(raw$Site))
+if (run_models) for (site in sites) {
+  for (metric in c("max","mean","range")) {
+    response <- paste0(metric,"_WT")
+    message("=== ",site," / ",metric," ===")
+    checkpoint <- file.path(ml_dir,paste0(site,"_",metric,"_metrics_revised.csv"))
+    if (resume_completed && file.exists(checkpoint)) {
+      message("Skipping completed: ",site," / ",metric); next
+    }
+    out <- run_one(raw[raw$Site==site,,drop=FALSE],response,site,metric)
+    # A checkpoint per site/response avoids losing completed work if interrupted.
+    is_gls <- grepl("_gls$", names(out$models))
+    saveRDS(out$models[!is_gls],file.path(ml_dir,paste0(site,"_",metric,"_ml_models_revised.rds")))
+    saveRDS(out$models[is_gls],file.path(gls_dir,paste0(site,"_",metric,"_gls_models_revised.rds")))
+    readr::write_csv(out$selections,file.path(ml_dir,paste0(site,"_",metric,"_gam_folds_revised.csv")))
+    readr::write_csv(out$vif,file.path(gls_dir,paste0(site,"_",metric,"_vif_revised.csv")))
+    readr::write_csv(out$summary,file.path(ml_dir,paste0(site,"_",metric,"_metrics_revised.csv")))
+    rm(out); gc(verbose=FALSE)
+  }
+}
+```
+
+## Consolidated results
+
+```{r summaries}
+files <- list.files(ml_dir,pattern="_metrics_revised\\.csv$",full.names=TRUE)
+metrics_local_revised <- dplyr::bind_rows(lapply(files,readr::read_csv,show_col_types=FALSE))
+readr::write_csv(metrics_local_revised,file.path(ml_dir,"local_models_summary_revised.csv"))
+selection_files <- list.files(ml_dir,pattern="_gam_folds_revised\\.csv$",full.names=TRUE)
+selection_local_revised <- dplyr::bind_rows(lapply(selection_files,readr::read_csv,show_col_types=FALSE))
+readr::write_csv(selection_local_revised,file.path(ml_dir,"local_gam_fold_selections_revised.csv"))
+```
+
+
+## Model diagnostics and coefficients
+
+```{r diagnostics}
+model_paths <- c(list.files(ml_dir, "_ml_models_revised\\.rds$", full.names=TRUE),
+                 list.files(gls_dir, "_gls_models_revised\\.rds$", full.names=TRUE))
+collect_final <- function(fn) {
+  fits <- readRDS(fn)
+  out <- purrr::imap_dfr(fits, function(x, key) {
+    parts <- strsplit(key, "_", fixed=TRUE)[[1]]
+    bp <- if (!is.null(x$best_params)) as.list(x$best_params[1,,drop=FALSE]) else list()
+    tibble::tibble(Site=parts[1], Metric=parts[2], Set=parts[3], Model=toupper(parts[4]),
+                   n_predictors=length(x$predictors), predictors=paste(x$predictors,collapse="; "),
+                   best_params=paste(paste(names(bp),unlist(bp),sep="="),collapse="; "),
+                   n_oof=nrow(x$oof_predictions),
+                   max_abs_error=if(nrow(x$oof_predictions)) max(abs(x$oof_predictions$obs-x$oof_predictions$pred),na.rm=TRUE) else NA_real_)
+  })
+  rm(fits); gc(verbose=FALSE); out
+}
+final_diagnostics <- dplyr::bind_rows(lapply(model_paths,collect_final))
+readr::write_csv(final_diagnostics,file.path(ml_dir,"local_final_model_diagnostics_revised.csv"))
+
+coef_rows <- list(); phi_rows <- list(); internal_rows <- list(); oof_rows <- list()
+for (fn in model_paths) {
+  models <- readRDS(fn)
+  for (key in names(models)) {
+    x <- models[[key]]; parts <- strsplit(key,"_",fixed=TRUE)[[1]]
+    info <- tibble::tibble(Site=parts[1],Metric=parts[2],Set=parts[3],Model=toupper(parts[4]))
+    oof_rows[[length(oof_rows)+1L]] <- dplyr::bind_cols(info[rep(1,nrow(x$oof_predictions)),,drop=FALSE],dplyr::select(x$oof_predictions,-dplyr::any_of(c("Site","Metric","Set","Model"))))
+    if (parts[4]=="gls") {
+      tt <- summary(x$fit_object)$tTable
+      coef_rows[[length(coef_rows)+1L]] <- dplyr::bind_cols(info[rep(1,nrow(tt)),,drop=FALSE],
+          tibble::tibble(predictor=rownames(tt),estimate=tt[,"Value"],SE=tt[,"Std.Error"],
+                         t_value=tt[,"t-value"],p_value=tt[,"p-value"]))
+      phi <- tryCatch(as.numeric(coef(x$fit_object$modelStruct$corStruct,unconstrained=FALSE)),error=function(e) NA_real_)
+      phi_rows[[length(phi_rows)+1L]] <- dplyr::mutate(info,phi=phi)
+    } else if (!is.null(x$var_importance)) {
+      imp <- x$var_importance
+      internal_rows[[length(internal_rows)+1L]] <- dplyr::bind_cols(info[rep(1,nrow(imp)),,drop=FALSE],
+         tibble::tibble(Variable=rownames(imp),Importance=as.numeric(imp[[1]])))
+    }
+  }
+  rm(models); gc(verbose=FALSE)
+}
+readr::write_csv(dplyr::bind_rows(coef_rows),file.path(gls_dir,"gls_coefficients_local_revised.csv"))
+readr::write_csv(dplyr::bind_rows(phi_rows),file.path(gls_dir,"gls_ar1_phi_local_revised.csv"))
+readr::write_csv(dplyr::bind_rows(internal_rows),file.path(ml_dir,"varimp_internal_local_revised.csv"))
+all_oof <- dplyr::bind_rows(oof_rows)
+readr::write_csv(all_oof,file.path(ml_dir,"local_oof_predictions_revised.csv"))
+vif_files <- list.files(gls_dir,"_vif_revised\\.csv$",full.names=TRUE)
+readr::write_csv(dplyr::bind_rows(lapply(vif_files,readr::read_csv,show_col_types=FALSE)),
+                 file.path(gls_dir,"gls_vif_log_local_revised.csv"))
+```
+
+
+## Common-date out-of-fold performance
+
+Compare RFR, XGB, and GLS on matched observation dates without refitting.
+
+```{r comparable_oof_metrics}
+# `all_oof` is created in the diagnostics chunk above.
+stopifnot(exists("all_oof"), all(c("Site","Metric","Set","Model","Date","obs","pred") %in% names(all_oof)))
+valid_oof <- all_oof |>
+  dplyr::filter(is.finite(obs), is.finite(pred)) |>
+  dplyr::mutate(Date=as.Date(Date))
+
+# Check that each model predicts each date at most once.
+duplicates <- valid_oof |>
+  dplyr::count(Site,Metric,Set,Model,Date) |>
+  dplyr::filter(n > 1)
+if (nrow(duplicates)) stop("Duplicate site/metric/set/model/date OOF predictions; inspect before scoring.")
+
+# A comparable date must have predictions from ALL three algorithms.
+common_dates <- valid_oof |>
+  dplyr::group_by(Site,Metric,Set,Date) |>
+  dplyr::summarise(n_models=dplyr::n_distinct(Model),.groups="drop") |>
+  dplyr::filter(n_models == 3L) |>
+  dplyr::select(Site,Metric,Set,Date)
+
+common_oof <- valid_oof |>
+  dplyr::inner_join(common_dates,by=c("Site","Metric","Set","Date"))
+
+# Verify that the observed value is identical for every model on each date.
+obs_disagreement <- common_oof |>
+  dplyr::group_by(Site,Metric,Set,Date) |>
+  dplyr::summarise(obs_span=max(obs)-min(obs),.groups="drop") |>
+  dplyr::filter(obs_span > 1e-8)
+if (nrow(obs_disagreement)) stop("Observed WT differs across models on the same date.")
+
+score_predictive <- function(d) {
+  n <- nrow(d)
+  if (n < 3L) return(tibble::tibble(RMSE=NA_real_,MAE=NA_real_,R2=NA_real_,NSE=NA_real_,n_oof=n))
+  sse <- sum((d$obs-d$pred)^2)
+  sst <- sum((d$obs-mean(d$obs))^2)
+  r2 <- if (sst > 0) 1-sse/sst else NA_real_
+  tibble::tibble(RMSE=sqrt(mean((d$obs-d$pred)^2)),
+                 MAE=mean(abs(d$obs-d$pred)),R2=r2,NSE=r2,n_oof=n)
+}
+
+common_metrics <- common_oof |>
+  dplyr::group_by(Site,Metric,Set,Model) |>
+  dplyr::group_modify(~score_predictive(.x)) |>
+  dplyr::ungroup()
+
+# Original prediction counts make the effects of common-date filtering transparent.
+original_counts <- valid_oof |>
+  dplyr::count(Site,Metric,Set,Model,name="n_oof_original")
+common_metrics <- common_metrics |>
+  dplyr::left_join(original_counts,by=c("Site","Metric","Set","Model")) |>
+  dplyr::mutate(n_excluded=n_oof_original-n_oof) |>
+  dplyr::arrange(Site,Metric,Set,Model)
+
+readr::write_csv(common_metrics,file.path(ml_dir,"local_models_summary_common_dates_revised.csv"))
+readr::write_csv(common_oof,file.path(ml_dir,"local_oof_common_dates_revised.csv"))
+```
+
+
+## Permutation importance
+
+Importance is calculated on final-model training data as the increase in RMSE.
+
+```{r permutation_importance}
+if (run_importance) {
+  imp_dir <- file.path(ml_dir,"importance_revised")
+  dir.create(imp_dir,recursive=TRUE,showWarnings=FALSE)
+  for (fn in model_paths) {
+    models <- readRDS(fn)
+    for (key in names(models)) {
+      dest <- file.path(imp_dir,paste0(key,"_permutation_revised.csv"))
+      if (resume_completed && file.exists(dest)) next
+      x <- models[[key]]; parts <- strsplit(key,"_",fixed=TRUE)[[1]]
+      dat <- raw[raw$Site==parts[1],,drop=FALSE]
+      pred_names <- x$predictors
+      dat <- dat[stats::complete.cases(dat[,c(x$response,pred_names),drop=FALSE]),,drop=FALSE]
+      if (!nrow(dat)) next
+      # Predictors and response are numeric; iml accepts a custom predict function.
+      pf <- function(model,newdata) as.numeric(stats::predict(model,newdata=newdata))
+      predictor <- iml::Predictor$new(model=x$fit_object,data=dat[,pred_names,drop=FALSE],
+                                      y=dat[[x$response]],predict.function=pf)
+      set.seed(42)
+      imp <- iml::FeatureImp$new(predictor,loss="rmse",compare="difference",
+                                 n.repetitions=importance_repetitions)
+      tab <- as.data.frame(imp$results)
+      names(tab)[names(tab)=="feature"] <- "Variable"
+      names(tab)[names(tab)=="importance"] <- "Importance"
+      tab <- dplyr::mutate(tab,Site=parts[1],Metric=parts[2],Set=parts[3],
+                            Model=toupper(parts[4]),.before=1)
+      readr::write_csv(tab,dest)
+      rm(imp,predictor); gc(verbose=FALSE)
+    }
+    rm(models); gc(verbose=FALSE)
+  }
+}
+imp_dir <- file.path(ml_dir,"importance_revised")
+imp_files <- if (dir.exists(imp_dir)) list.files(imp_dir,"_permutation_revised\\.csv$",full.names=TRUE) else character()
+if (length(imp_files)) {
+  permutation_vi <- dplyr::bind_rows(lapply(imp_files,readr::read_csv,show_col_types=FALSE))
+  readr::write_csv(permutation_vi,file.path(ml_dir,"varimp_permutation_local_ALL_revised.csv"))
+}
+```
+
+
+## Observed versus predicted — Set A
+
+```{r oof_plots}
+
+resp_lab <- c(max = "Max WT", mean = "Mean WT", range = "Range WT")
+
+out_dir <- file.path(fig_dir, "obs_pred_local")
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+# Use revised Set A outer-fold predictions
+dd <- all_oof |>
+  dplyr::filter(
+    Set == "A",
+    is.finite(obs),
+    is.finite(pred)
+  ) |>
+  dplyr::mutate(
+    Model = factor(Model, levels = c("GLS", "RFR", "XGB")),
+    Site = factor(Site, levels = sort(unique(as.character(Site))))
+  )
+
+for (metric in c("max", "mean", "range")) {
+
+  plot_df <- dd |>
+    dplyr::filter(Metric == metric)
+
+  if (nrow(plot_df) == 0) next
+
+  # Common axis limits for all panels
+  lims <- c(
+    floor(min(c(plot_df$obs, plot_df$pred))),
+    ceiling(max(c(plot_df$obs, plot_df$pred)))
+  )
+
+  # Integer tick marks, similar to original
+  step <- max(1, round(diff(lims) / 7))
+  breaks <- seq(lims[1], lims[2], by = step)
+
+  # Calculate slope and RMSE from revised OOF predictions
+  annotations <- plot_df |>
+    dplyr::group_by(Site, Model) |>
+    dplyr::summarise(
+      slope = if (dplyr::n_distinct(obs) > 1) {
+        unname(coef(stats::lm(pred ~ obs))[2])
+      } else {
+        NA_real_
+      },
+      RMSE = sqrt(mean((pred - obs)^2)),
+      .groups = "drop"
+    ) |>
+    dplyr::mutate(
+      label = sprintf("slope=%.2f\nRMSE=%.2f", slope, RMSE),
+      x = lims[1] + 0.03 * diff(lims),
+      y = lims[2] - 0.05 * diff(lims)
+    )
+
+  p <- ggplot2::ggplot(
+    plot_df,
+    ggplot2::aes(x = obs, y = pred)
+  ) +
+    ggplot2::geom_point(
+      alpha = 0.65,
+      size = 1.3
+    ) +
+    ggplot2::geom_abline(
+      slope = 1,
+      intercept = 0,
+      linetype = "dashed",
+      linewidth = 0.7
+    ) +
+    ggplot2::geom_smooth(
+      method = "lm",
+      se = FALSE,
+      color = "red",
+      linewidth = 0.9
+    ) +
+    ggplot2::geom_text(
+      data = annotations,
+      ggplot2::aes(x = x, y = y, label = label),
+      inherit.aes = FALSE,
+      hjust = 0,
+      vjust = 1,
+      size = 3
+    ) +
+    ggplot2::facet_grid(Model ~ Site) +
+    ggplot2::coord_equal(
+      xlim = lims,
+      ylim = lims,
+      expand = FALSE
+    ) +
+    ggplot2::scale_x_continuous(
+      breaks = breaks,
+      minor_breaks = NULL
+    ) +
+    ggplot2::scale_y_continuous(
+      breaks = breaks,
+      minor_breaks = NULL
+    ) +
+    ggplot2::labs(
+      title = resp_lab[[metric]],
+      x = "Observed (°C)",
+      y = "Predicted (°C)"
+    ) +
+    ggplot2::theme_minimal(base_size = 12) +
+    ggplot2::theme(
+      panel.grid.minor = ggplot2::element_blank(),
+      panel.grid.major = ggplot2::element_line(linewidth = 0.35),
+      strip.text = ggplot2::element_text(face = "bold"),
+      panel.spacing = grid::unit(6, "pt"),
+      plot.title = ggplot2::element_text(size = 15),
+      legend.position = "none",
+      plot.margin = grid::unit(c(5, 6, 5, 6), "pt")
+    )
+
+  ggplot2::ggsave(
+    filename = file.path(
+      out_dir,
+      paste0("local_", metric, "_obs_vs_pred_revised.png")
+    ),
+    plot = p,
+    width = 12,
+    height = 8.5,
+    units = "in",
+    dpi = 300,
+    bg = "white"
+  )
+
+  print(p)
+}
+```
+
+## Running the analysis
+
+For a single-site test, set `test_site <- "Anvil"` and `run_importance <- FALSE`. Use `test_site <- NULL` for all sites. Saved checkpoints can be used to rebuild summaries and figures with `run_models <- FALSE`.
+
+Temporal selection is repeated within outer training folds, but not within caret tuning folds. Use outer-fold performance for evaluation.

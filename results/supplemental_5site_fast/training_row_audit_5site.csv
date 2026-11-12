@@ -1,0 +1,16 @@
+"response","fold","full_train_n","partial_train_n","train_match","full_validation_n","partial_validation_n","validation_match"
+"max",1,899,899,TRUE,183,183,TRUE
+"max",2,865,865,TRUE,217,217,TRUE
+"max",3,851,851,TRUE,231,231,TRUE
+"max",4,858,858,TRUE,224,224,TRUE
+"max",5,855,855,TRUE,227,227,TRUE
+"mean",1,899,899,TRUE,183,183,TRUE
+"mean",2,865,865,TRUE,217,217,TRUE
+"mean",3,851,851,TRUE,231,231,TRUE
+"mean",4,858,858,TRUE,224,224,TRUE
+"mean",5,855,855,TRUE,227,227,TRUE
+"range",1,899,899,TRUE,183,183,TRUE
+"range",2,865,865,TRUE,217,217,TRUE
+"range",3,851,851,TRUE,231,231,TRUE
+"range",4,858,858,TRUE,224,224,TRUE
+"range",5,855,855,TRUE,227,227,TRUE

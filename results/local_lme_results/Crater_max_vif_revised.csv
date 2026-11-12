@@ -1,0 +1,11 @@
+Site,Metric,Set,fold,kept,dropped
+Crater,max,A,1,WL_max_7day; Air_tmin_3day; ppt; Air_trange; WL_daily_range; GWT_range; Water_area_m2_3d,WL_mean_7day; GWL_mean_7day; GWT_max; WL_min_7day; GWT_min_3day; GWL_min_7day; Air_tmean_3day; GWL_max_7day; GWL_range; Air_tmax_2day; GWT_mean; Solar_3d
+Crater,max,B,1,Solar_3d; Air_tmin_3day; ppt; Air_trange,Air_tmean_3day; Air_tmax_2day
+Crater,max,A,2,Solar_7d; Air_tmean_3day; Air_tmin_7day; ppt; Air_trange; WL_daily_range; GWT_range; Water_area_m2_3d,GWT_mean_7day; GWL_mean_7day; WL_min_7day; GWT_min_7day; GWL_min_7day; WL_mean_7day; GWT_max_7day; GWL_range; Air_tmax_7day; GWL_max_7day; WL_max_3day
+Crater,max,B,2,Solar_7d; Air_tmean_3day; Air_tmin_7day; ppt; Air_trange,Air_tmax_7day
+Crater,max,A,3,Solar_7d; WL_max_3day; Air_tmin_3day; ppt; Air_trange; WL_daily_range; GWT_range; Water_area_m2_3d,GWT_mean_7day; GWL_mean_7day; GWT_min_7day; WL_mean_3day; WL_min_3day; GWL_min_7day; GWL_max_7day; Air_tmean_2day; GWL_range; Air_tmax_3day; GWT_max_7day
+Crater,max,B,3,Solar_7d; Air_tmin_3day; ppt; Air_trange,Air_tmean_2day; Air_tmax_3day
+Crater,max,A,4,Solar_7d; WL_mean_7day; Air_tmin; ppt; Air_trange; WL_daily_range; GWT_range; Water_area_m2_3d,GWT_mean_7day; GWL_mean_7day; WL_min_7day; GWT_min_7day; GWL_min_7day; WL_max_2day; Air_tmean_2day; GWL_range; GWL_max_7day; GWT_max_7day; Air_tmax_3day
+Crater,max,B,4,Solar_7d; Air_tmin; ppt; Air_trange,Air_tmean_2day; Air_tmax_3day
+Crater,max,A,5,WL_mean_7day; Air_tmax_7day; Air_tmin; ppt; Air_trange; WL_daily_range; GWT_range; Water_area_m2_3d,GWT_mean_7day; GWT_min_7day; GWL_mean; WL_min_7day; GWL_min_2day; WL_daily_max; GWL_max; GWL_range; Air_tmean_3day; Solar_7d; GWT_max_7day
+Crater,max,B,5,Solar_7d; Air_tmax_7day; Air_tmin; ppt; Air_trange,Air_tmean_3day

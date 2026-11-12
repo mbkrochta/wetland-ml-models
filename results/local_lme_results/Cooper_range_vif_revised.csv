@@ -1,0 +1,11 @@
+Site,Metric,Set,fold,kept,dropped
+Cooper,range,A,1,Solar_daily; Air_tmean; Air_tmin_7day; ppt; Air_trange,Air_tmax
+Cooper,range,B,1,Solar_daily; Air_tmean; Air_tmin_7day; ppt; Air_trange,Air_tmax
+Cooper,range,A,2,Solar_daily; Air_tmin_3day; ppt; Air_trange,Air_tmax; Air_tmean
+Cooper,range,B,2,Solar_daily; Air_tmin_3day; ppt; Air_trange,Air_tmax; Air_tmean
+Cooper,range,A,3,Solar_daily; Air_tmean; Air_tmin_7day; ppt; Air_trange,Air_tmax
+Cooper,range,B,3,Solar_daily; Air_tmean; Air_tmin_7day; ppt; Air_trange,Air_tmax
+Cooper,range,A,4,Solar_daily; Air_tmin_3day; ppt; Air_trange,Air_tmax; Air_tmean
+Cooper,range,B,4,Solar_daily; Air_tmin_3day; ppt; Air_trange,Air_tmax; Air_tmean
+Cooper,range,A,5,Solar_daily; Air_tmean; Air_tmin_7day; ppt; Air_trange,Air_tmax
+Cooper,range,B,5,Solar_daily; Air_tmean; Air_tmin_7day; ppt; Air_trange,Air_tmax

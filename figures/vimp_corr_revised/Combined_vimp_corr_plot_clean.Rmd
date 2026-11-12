@@ -1,0 +1,199 @@
+---
+title: "Revised WT predictor importance and Spearman correlation"
+output: html_document
+---
+
+```{r setup, message=FALSE, warning=FALSE}
+library(dplyr)
+library(readr)
+library(stringr)
+library(ggplot2)
+
+project_dir <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models"
+global_vi_path <- file.path(project_dir, "results", "varimp_permutation_revised_ALL_algorithms.csv")
+local_vi_path  <- file.path(project_dir, "results", "local_results", "varimp_permutation_local_ALL_revised.csv")
+daily_path     <- file.path(project_dir, "data", "daily_wetlands_dataset.csv")
+
+output_dir <- file.path(project_dir, "figures", "vimp_corr_revised")
+for (path in c(global_vi_path, local_vi_path, daily_path)) {
+  if (!file.exists(path)) stop("Input not found: ", path)
+}
+dir.create(output_dir, recursive=TRUE, showWarnings=FALSE)
+
+site_order <- c("Global", "Anvil", "Butte", "Cooper", "Crater", "Hideaway", "Pint", "Sam")
+metric_labels <- c(max="Max WT", mean="Mean WT", range="Range WT")
+model_order <- c("LM", "RFR", "XGB")
+```
+
+```{r revised-inputs-and-correlations}
+global_vi <- read_csv(global_vi_path, show_col_types=FALSE) %>%
+  filter(set == "A", type == "permutation") %>%
+  transmute(Site="Global", Metric=as.character(response),
+            Model=toupper(as.character(alg)), Variable=as.character(Variable),
+            Importance=as.numeric(Importance)) %>%
+  mutate(Model=if_else(Model %in% c("LME", "GLS"), "LM", Model))
+
+local_vi <- read_csv(local_vi_path, show_col_types=FALSE) %>%
+  filter(Set == "A") %>%
+  transmute(Site=as.character(Site), Metric=as.character(Metric),
+            Model=toupper(as.character(Model)), Variable=as.character(Variable),
+            Importance=as.numeric(Importance)) %>%
+  mutate(Model=if_else(Model %in% c("LME", "GLS"), "LM", Model))
+
+vi <- bind_rows(global_vi, local_vi) %>%
+  filter(Metric %in% names(metric_labels), Model %in% model_order,
+         Site %in% site_order, is.finite(Importance))
+if (nrow(vi) == 0) stop("No revised Set A importance records were loaded.")
+if (anyDuplicated(vi[c("Site", "Metric", "Model", "Variable")])) {
+  stop("Duplicate raw importance keys. Investigate before plotting.")
+}
+
+# Spearman correlation for each selected predictor, pooled globally or calculated by site.
+daily <- read_csv(daily_path, show_col_types=FALSE)
+response_col <- c(max="max_WT", mean="mean_WT", range="range_WT")
+required <- unique(c("Site", unname(response_col), vi$Variable))
+missing_cols <- setdiff(required, names(daily))
+if (length(missing_cols)) stop("Missing columns in daily data: ", paste(missing_cols, collapse=", "))
+
+corr_keys <- vi %>% distinct(Site, Metric, Variable)
+calc_rho <- function(site, metric, variable) {
+  dat <- if (site == "Global") daily else daily[daily$Site == site, , drop=FALSE]
+  x <- dat[[variable]]
+  y <- dat[[response_col[[metric]]]]
+  ok <- is.finite(x) & is.finite(y)
+  if (sum(ok) < 3L || length(unique(x[ok])) < 2L || length(unique(y[ok])) < 2L) return(NA_real_)
+  suppressWarnings(cor(x[ok], y[ok], method="spearman"))
+}
+corr_keys$rho <- mapply(calc_rho, corr_keys$Site, corr_keys$Metric, corr_keys$Variable)
+combined <- vi %>% left_join(corr_keys, by=c("Site", "Metric", "Variable"))
+if (anyNA(combined$rho)) {
+  stop("Unestimable rho for ", sum(is.na(combined$rho)),
+       " records; check the input data rather than silently dropping points.")
+}
+write_csv(combined, file.path(output_dir, "importance_correlations_revised_all_lags.csv"))
+```
+
+```{r variable-groups}
+# Group temporal variants under their common predictor label.
+
+collapse_row <- function(v) {
+  v <- str_remove(v, "_(7day|3day|2day|7d|3d|2d)$")
+  v <- str_replace(v, "^WL_daily_", "WL_")
+  v <- str_replace(v, "^Solar_daily$", "Solar")
+  v <- str_replace(v, "^Water_area_m2$", "Water_area")
+  v <- str_replace(v, "^Air_t(max|mean|min|range)$", "Air_t_\\1")
+  v
+}
+
+row_order_top_to_bottom <- c(
+  "Size_km2", "Elev_m",
+  "Solar", "ppt", "Air_t_range", "Air_t_min", "Air_t_mean", "Air_t_max",
+  "WL_range", "WL_min", "WL_mean", "WL_max",
+  "Water_area",
+  "GWT_range", "GWT_min", "GWT_mean", "GWT_max",
+  "GWL_range", "GWL_min", "GWL_mean", "GWL_max"
+)
+
+row_label <- c(
+  Size_km2="Size", Elev_m="Elev", Solar="Solar", ppt="PPT",
+  Air_t_max="Air max", Air_t_mean="Air mean", Air_t_min="Air min", Air_t_range="Air range",
+  WL_min="WL min", WL_mean="WL mean", WL_max="WL max", WL_range="WL range",
+  Water_area="Open water",
+  GWT_range="GWT range", GWT_min="GWT min", GWT_mean="GWT mean", GWT_max="GWT max",
+  GWL_range="GWL range", GWL_min="GWL min", GWL_mean="GWL mean", GWL_max="GWL max"
+)
+
+plot_data <- combined %>%
+  mutate(
+    VarRow=collapse_row(Variable),
+    VarGroup=case_when(
+      VarRow %in% c("Size_km2", "Elev_m") ~ "Static",
+      VarRow %in% c("Solar", "ppt", "Air_t_max", "Air_t_mean", "Air_t_min", "Air_t_range") ~ "Atmospheric",
+      VarRow %in% c("WL_min", "WL_mean", "WL_max", "WL_range", "Water_area",
+                    "GWT_range", "GWT_min", "GWT_mean", "GWT_max",
+                    "GWL_range", "GWL_min", "GWL_mean", "GWL_max") ~ "Hydrologic",
+      TRUE ~ NA_character_
+    )
+  )
+
+unknown <- plot_data %>% filter(is.na(VarGroup) | !VarRow %in% row_order_top_to_bottom) %>%
+  distinct(Variable, VarRow)
+if (nrow(unknown)) {
+  print(unknown)
+  stop("Unmapped predictor names: update collapse_row() deliberately before plotting.")
+}
+
+plot_data <- plot_data %>%
+  # Scale importance before grouping lag variants.
+  group_by(Metric, Site, Model) %>%
+  mutate(Importance_scaled={
+    lo <- min(Importance, na.rm=TRUE)
+    hi <- max(Importance, na.rm=TRUE)
+    if (hi > lo) (Importance-lo)/(hi-lo) else rep(0, n())
+  }) %>%
+  ungroup() %>%
+  mutate(
+    Site=factor(Site, levels=site_order),
+    Model=factor(Model, levels=model_order),
+    VarGroup=factor(VarGroup, levels=c("Static", "Atmospheric", "Hydrologic")),
+    VarRow_plot=factor(VarRow, levels=rev(row_order_top_to_bottom),
+                       labels=unname(row_label[rev(row_order_top_to_bottom)]))
+  )
+
+stopifnot(nrow(plot_data) == nrow(combined))
+stopifnot(!anyNA(plot_data$VarRow_plot))
+stopifnot(all(plot_data$Importance_scaled >= 0 & plot_data$Importance_scaled <= 1))
+
+write_csv(plot_data, file.path(output_dir, "plot_data_revised_all_lags_collapsed_rows.csv"))
+```
+
+```{r bubble-plots}
+plot_metric_bubbles_nolag <- function(metric) {
+  df <- plot_data %>% filter(.data$Metric == .env$metric)
+  if (!nrow(df)) stop("No plot records for ", metric)
+
+  ggplot(df, aes(x=Site, y=VarRow_plot)) +
+    geom_point(aes(size=Importance_scaled, color=rho, fill=rho),
+               shape=21, alpha=0.9, stroke=0.3) +
+    scale_x_discrete(
+      limits=site_order,
+      labels=function(x) parse(text=ifelse(x == "Global", "bold(Global)", x))
+    ) +
+    scale_color_gradient2(low="#2166ac", mid="white", high="#b2182b",
+                          midpoint=0, limits=c(-1,1), oob=scales::squish,
+                          name="Spearman correlation") +
+    scale_fill_gradient2(low="#2166ac", mid="white", high="#b2182b",
+                         midpoint=0, limits=c(-1,1), oob=scales::squish,
+                         guide="none") +
+    scale_size_area(max_size=7, limits=c(0,1),
+                    breaks=c(0,0.25,0.5,0.75,1),
+                    name="Relative importance (0–1)") +
+    guides(size=guide_legend(override.aes=list(
+      shape=21, fill="black", color="black", alpha=1))) +
+    facet_grid(VarGroup ~ Model, scales="free_y", space="free_y", switch="y") +
+    labs(x="Site", y=NULL, title=metric_labels[[metric]]) +
+    theme_minimal(base_size=11) +
+    theme(
+      panel.grid.major.x=element_line(color="grey90", linewidth=0.3),
+      panel.grid.major.y=element_line(color="grey90", linewidth=0.3),
+      panel.grid.minor=element_blank(),
+      panel.background=element_rect(fill="white", color=NA),
+      plot.background=element_rect(fill="white", color=NA),
+      legend.background=element_rect(fill="white", color=NA),
+      strip.background=element_rect(fill="grey90", color=NA),
+      axis.text.x=element_text(angle=45, hjust=1),
+      strip.text.x=element_text(face="bold", size=12),
+      strip.text.y=element_text(face="bold", size=11),
+      legend.position="right", strip.placement="outside",
+      panel.spacing.x=grid::unit(1.2, "lines")
+    )
+}
+
+for (metric in names(metric_labels)) {
+  p <- plot_metric_bubbles_nolag(metric)
+  print(p)
+  stem <- c(max="MaxWT", mean="MeanWT", range="RangeWT")[[metric]]
+  ggsave(file.path(output_dir, paste0(stem, "_bubbles_nolag_revised_order_corrected.png")),
+         p, width=10, height=8, dpi=300, bg="white")
+}
+```

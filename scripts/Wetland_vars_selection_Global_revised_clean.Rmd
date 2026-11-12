@@ -1,0 +1,212 @@
+---
+title: "Global wetland predictor selection"
+output: html_document
+date: "2025-08-05"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+```{r global_selection}
+# Packages
+library(tidyverse)
+library(mgcv)
+library(lubridate)
+
+
+# Input data
+df <- read.csv("C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/data/daily_wetlands_dataset.csv")
+
+# Standardize WL and GWL variables within each site.
+vars_to_scale <- c(
+  "WL_daily_mean","WL_daily_max","WL_daily_min","WL_daily_range",
+  "WL_mean_2day","WL_mean_3day","WL_mean_7day",
+  "WL_max_2day","WL_max_3day","WL_max_7day",
+  "WL_min_2day","WL_min_3day","WL_min_7day",
+  "GWL_mean","GWL_max","GWL_min","GWL_range",
+  "GWL_mean_2day","GWL_mean_3day","GWL_mean_7day",
+  "GWL_max_2day","GWL_max_3day","GWL_max_7day",
+  "GWL_min_2day","GWL_min_3day","GWL_min_7day"
+)
+
+vars_to_scale <- intersect(vars_to_scale, names(df))
+
+# Return zero for nonmissing values when within-site variance is zero.
+z_by_site <- function(x) {
+  m <- mean(x, na.rm = TRUE)
+  s <- sd(x, na.rm = TRUE)
+  if (is.na(s) || s == 0) {
+    return(ifelse(is.na(x), NA_real_, 0))
+  }
+  (x - m) / s
+}
+
+df_std <- df %>%
+  group_by(Site) %>%
+  mutate(across(all_of(vars_to_scale), z_by_site)) %>%
+  ungroup()
+
+
+# Response variables and candidate predictors
+responses <- c("mean_WT", "max_WT", "range_WT")
+
+predictor_groups <- list(
+  Solar    = c("Solar_daily", "Solar_2d", "Solar_3d", "Solar_7d"),
+  WL_mean  = c("WL_daily_mean", "WL_mean_2day", "WL_mean_3day", "WL_mean_7day"),
+  WL_max   = c("WL_daily_max", "WL_max_2day", "WL_max_3day", "WL_max_7day"),
+  WL_min   = c("WL_daily_min", "WL_min_2day", "WL_min_3day", "WL_min_7day"),
+  Air_tmean= c("Air_tmean", "Air_tmean_2day", "Air_tmean_3day", "Air_tmean_7day"),
+  Air_tmax = c("Air_tmax", "Air_tmax_2day", "Air_tmax_3day", "Air_tmax_7day"),
+  Air_tmin = c("Air_tmin", "Air_tmin_2day", "Air_tmin_3day", "Air_tmin_7day"),
+  GWT_mean = c("GWT_mean", "GWT_mean_2day", "GWT_mean_3day", "GWT_mean_7day"),
+  GWT_max  = c("GWT_max", "GWT_max_2day", "GWT_max_3day", "GWT_max_7day"),
+  GWT_min  = c("GWT_min", "GWT_min_2day", "GWT_min_3day", "GWT_min_7day"),
+  GWL_mean = c("GWL_mean", "GWL_mean_2day", "GWL_mean_3day", "GWL_mean_7day"),
+  GWL_max  = c("GWL_max", "GWL_max_2day", "GWL_max_3day", "GWL_max_7day"),
+  GWL_min  = c("GWL_min", "GWL_min_2day", "GWL_min_3day", "GWL_min_7day"),
+  ppt      = c("ppt", "ppt_7day")
+)
+
+# Additional predictors retained in each global model
+static_predictors <- c(
+  "Air_trange", "WL_daily_range",
+  "GWT_range", "GWL_range", "Water_area_m2_3d",
+  "Elev_m", "Size_km2"
+)
+
+
+# Select temporal representations using GAMs and five week-blocked folds.
+
+make_gam_weekly_folds <- function(data, k = 5, seed = 42) {
+  weeks <- unique(lubridate::floor_date(as.Date(data$Datetime),
+                                        unit = "week", week_start = 1))
+  if (length(weeks) < k) stop("Not enough distinct weeks for GAM cross-validation")
+  set.seed(seed)
+  weeks <- sample(weeks)
+  groups <- split(weeks, rep(seq_len(k), length.out = length(weeks)))
+  lapply(groups, function(w) {
+    which(lubridate::floor_date(as.Date(data$Datetime),
+                               unit = "week", week_start = 1) %in% w)
+  })
+}
+
+select_gam_predictors <- function(train_data, response_var, k_folds = 5, seed = 42) {
+  purrr::imap_dfr(predictor_groups, function(vars, group_name) {
+    existing <- intersect(vars, names(train_data))
+    if (!length(existing)) return(tibble())
+
+    # Compare temporal alternatives using the same complete observations.
+    common <- train_data %>%
+      select(all_of(c("Datetime", response_var, existing))) %>%
+      tidyr::drop_na()
+    if (!nrow(common)) stop("No complete data for group: ", group_name)
+    folds <- make_gam_weekly_folds(common, k = k_folds, seed = seed)
+
+    scores <- purrr::map_dfr(existing, function(v) {
+      pred <- rep(NA_real_, nrow(common))
+      for (holdout in folds) {
+        training <- common[-holdout, , drop = FALSE]
+        # Use a linear term if there are fewer than five unique values.
+        smooth_ok <- length(unique(training[[v]])) >= 5
+        f <- if (smooth_ok) {
+          stats::as.formula(paste0(response_var, " ~ s(`", v, "`, k = 5)"))
+        } else {
+          stats::reformulate(v, response = response_var)
+        }
+        fit <- mgcv::gam(f, data = training, method = "REML")
+        pred[holdout] <- stats::predict(fit, newdata = common[holdout, , drop = FALSE])
+      }
+      tibble(predictor = v, cv_rmse = sqrt(mean((common[[response_var]] - pred)^2)))
+    })
+    scores %>%
+      arrange(cv_rmse, match(predictor, existing)) %>%
+      slice(1) %>%
+      mutate(group = group_name, n = nrow(common), .before = 1)
+  })
+}
+
+# Full-data selections are for final datasets; model CV selects within training folds.
+best_predictors_all <- purrr::map(responses, ~ select_gam_predictors(df_std, .x))
+names(best_predictors_all) <- responses
+
+combined_predictor_lists <- purrr::map(best_predictors_all,
+                                      ~ unique(c(.x$predictor, static_predictors)))
+
+model_data <- purrr::map2(combined_predictor_lists, responses, function(vars, response) {
+  df_std %>% select(any_of(c("Site", "Datetime", response, vars)))
+})
+names(model_data) <- responses
+
+mean_model_final  <- model_data[["mean_WT"]]
+max_model_final   <- model_data[["max_WT"]]
+range_model_final <- model_data[["range_WT"]]
+
+
+output_dir <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/data"
+write.csv(mean_model_final,  file.path(output_dir, "mean_global_data_revised.csv"), row.names = FALSE)
+write.csv(max_model_final,   file.path(output_dir, "max_global_data_revised.csv"), row.names = FALSE)
+write.csv(range_model_final, file.path(output_dir, "range_global_data_revised.csv"), row.names = FALSE)
+
+selection_summary <- purrr::imap_dfr(best_predictors_all,
+                                    ~ mutate(.x, response = .y, .before = 1))
+write.csv(selection_summary,
+          file.path(output_dir, "global_gam_selection_revised.csv"), row.names = FALSE)
+print(selection_summary)
+
+```
+
+## Site summary
+
+```{r site_summary}
+# Means and standard deviations by site
+site_summary <- df %>%
+  group_by(Site) %>%
+  summarise(
+    mean_meanWT   = mean(mean_WT, na.rm = TRUE),
+    sd_meanWT     = sd(mean_WT, na.rm = TRUE),
+    mean_maxWT    = mean(max_WT, na.rm = TRUE),
+    sd_maxWT      = sd(max_WT, na.rm = TRUE),
+    mean_minWT    = mean(min_WT, na.rm = TRUE),
+    sd_minWT      = sd(min_WT, na.rm = TRUE),
+    mean_rangeWT  = mean(range_WT, na.rm = TRUE),
+    sd_rangeWT    = sd(range_WT, na.rm = TRUE)
+  )
+
+print(site_summary)
+
+write.csv(site_summary, file.path(output_dir, "site_summary_table.csv"), row.names = FALSE)
+```
+
+## Fold selection frequencies
+
+```{r global_outer_fold_frequency}
+# Uses selections exported by the global modeling script.
+
+selection_path <- file.path(
+  "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models",
+  "results", "global_gam_selection_folds_revised.csv"
+)
+
+stopifnot(file.exists(selection_path))
+
+fold_sel <- readr::read_csv(selection_path, show_col_types = FALSE)
+
+# Deduplicate recorded selections within each model and fold.
+fold_sel <- fold_sel %>%
+  dplyr::distinct(model_id, fold, group, predictor)
+
+print(unique(fold_sel$model_id))
+
+global_frequency <- fold_sel %>%
+  dplyr::count(model_id, group, predictor, name = "n_selected") %>%
+  dplyr::arrange(model_id, group, dplyr::desc(n_selected))
+
+print(global_frequency, n = Inf)
+
+readr::write_csv(
+  global_frequency,
+  file.path(dirname(selection_path),
+            "supp_global_temporal_selection_frequency.csv")
+)
+```

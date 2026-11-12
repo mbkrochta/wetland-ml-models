@@ -1,0 +1,85 @@
+Site,Metric,Set,Model,at_grid_edge,edge_parameters
+Anvil,max,A,RFR,TRUE,min.node.size
+Anvil,max,A,XGB,TRUE,nrounds; max_depth; eta
+Anvil,max,B,RFR,TRUE,mtry; min.node.size
+Anvil,max,B,XGB,TRUE,nrounds; max_depth; eta
+Anvil,mean,A,RFR,TRUE,min.node.size
+Anvil,mean,A,XGB,TRUE,nrounds; max_depth; eta
+Anvil,mean,B,RFR,TRUE,mtry; min.node.size
+Anvil,mean,B,XGB,TRUE,nrounds; max_depth; eta
+Anvil,range,A,RFR,TRUE,mtry; min.node.size
+Anvil,range,A,XGB,TRUE,nrounds; max_depth; eta
+Anvil,range,B,RFR,TRUE,mtry; min.node.size
+Anvil,range,B,XGB,TRUE,nrounds; max_depth; eta
+Butte,max,A,RFR,TRUE,mtry; min.node.size
+Butte,max,A,XGB,TRUE,nrounds; max_depth; eta
+Butte,max,B,RFR,TRUE,mtry; min.node.size
+Butte,max,B,XGB,TRUE,nrounds; max_depth; eta
+Butte,mean,A,RFR,TRUE,min.node.size
+Butte,mean,A,XGB,TRUE,nrounds; max_depth; eta
+Butte,mean,B,RFR,TRUE,mtry; min.node.size
+Butte,mean,B,XGB,TRUE,nrounds; max_depth; eta
+Butte,range,A,RFR,TRUE,mtry; min.node.size
+Butte,range,A,XGB,TRUE,nrounds; max_depth; eta
+Butte,range,B,RFR,TRUE,mtry; min.node.size
+Butte,range,B,XGB,TRUE,nrounds; max_depth; eta
+Cooper,max,A,RFR,TRUE,mtry; min.node.size
+Cooper,max,A,XGB,TRUE,nrounds; max_depth; eta
+Cooper,max,B,RFR,TRUE,mtry; min.node.size
+Cooper,max,B,XGB,TRUE,nrounds; max_depth; eta
+Cooper,mean,A,RFR,TRUE,mtry; min.node.size
+Cooper,mean,A,XGB,TRUE,nrounds; max_depth; eta
+Cooper,mean,B,RFR,TRUE,mtry; min.node.size
+Cooper,mean,B,XGB,TRUE,nrounds; max_depth; eta
+Cooper,range,A,RFR,TRUE,mtry; min.node.size
+Cooper,range,A,XGB,TRUE,nrounds; max_depth; eta
+Cooper,range,B,RFR,TRUE,mtry; min.node.size
+Cooper,range,B,XGB,TRUE,nrounds; max_depth; eta
+Crater,max,A,RFR,TRUE,mtry; min.node.size
+Crater,max,A,XGB,TRUE,nrounds; max_depth; eta
+Crater,max,B,RFR,TRUE,mtry; min.node.size
+Crater,max,B,XGB,TRUE,nrounds; max_depth; eta
+Crater,mean,A,RFR,TRUE,min.node.size
+Crater,mean,A,XGB,TRUE,nrounds; max_depth; eta
+Crater,mean,B,RFR,TRUE,mtry; min.node.size
+Crater,mean,B,XGB,TRUE,nrounds; max_depth; eta
+Crater,range,A,RFR,TRUE,min.node.size
+Crater,range,A,XGB,TRUE,nrounds; max_depth; eta
+Crater,range,B,RFR,TRUE,mtry; min.node.size
+Crater,range,B,XGB,TRUE,nrounds; max_depth; eta
+Hideaway,max,A,RFR,TRUE,mtry; min.node.size
+Hideaway,max,A,XGB,TRUE,nrounds; max_depth; eta
+Hideaway,max,B,RFR,TRUE,mtry; min.node.size
+Hideaway,max,B,XGB,TRUE,nrounds; max_depth; eta
+Hideaway,mean,A,RFR,TRUE,mtry; min.node.size
+Hideaway,mean,A,XGB,TRUE,nrounds; max_depth; eta
+Hideaway,mean,B,RFR,TRUE,mtry; min.node.size
+Hideaway,mean,B,XGB,TRUE,nrounds; max_depth; eta
+Hideaway,range,A,RFR,TRUE,mtry; min.node.size
+Hideaway,range,A,XGB,TRUE,nrounds; max_depth; eta
+Hideaway,range,B,RFR,TRUE,mtry; min.node.size
+Hideaway,range,B,XGB,TRUE,nrounds; max_depth; eta
+Pint,max,A,RFR,TRUE,mtry; min.node.size
+Pint,max,A,XGB,TRUE,nrounds; max_depth; eta
+Pint,max,B,RFR,TRUE,mtry; min.node.size
+Pint,max,B,XGB,TRUE,nrounds; max_depth; eta
+Pint,mean,A,RFR,TRUE,mtry; min.node.size
+Pint,mean,A,XGB,TRUE,nrounds; max_depth; eta
+Pint,mean,B,RFR,TRUE,mtry; min.node.size
+Pint,mean,B,XGB,TRUE,nrounds; max_depth; eta
+Pint,range,A,RFR,TRUE,mtry; min.node.size
+Pint,range,A,XGB,TRUE,nrounds; max_depth; eta
+Pint,range,B,RFR,TRUE,mtry; min.node.size
+Pint,range,B,XGB,TRUE,nrounds; max_depth; eta
+Sam,max,A,RFR,TRUE,min.node.size
+Sam,max,A,XGB,TRUE,nrounds; max_depth; eta
+Sam,max,B,RFR,TRUE,mtry; min.node.size
+Sam,max,B,XGB,TRUE,nrounds; max_depth; eta
+Sam,mean,A,RFR,TRUE,min.node.size
+Sam,mean,A,XGB,TRUE,nrounds; max_depth; eta
+Sam,mean,B,RFR,TRUE,mtry; min.node.size
+Sam,mean,B,XGB,TRUE,nrounds; max_depth; eta
+Sam,range,A,RFR,TRUE,mtry; min.node.size
+Sam,range,A,XGB,TRUE,nrounds; max_depth; eta
+Sam,range,B,RFR,TRUE,mtry; min.node.size
+Sam,range,B,XGB,TRUE,nrounds; max_depth; eta

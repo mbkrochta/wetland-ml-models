@@ -1,0 +1,11 @@
+Site,Metric,Set,fold,kept,dropped
+Sam,max,A,1,Solar_daily; WL_daily_max; Air_tmax; Air_tmin; GWT_max_7day; GWL_max; ppt_7day; GWT_range,Air_trange; WL_daily_range; GWL_range; GWT_mean_7day; Air_tmean; GWT_min_7day; GWL_mean; GWL_min; WL_daily_mean; WL_daily_min
+Sam,max,B,1,Solar_daily; Air_tmax; Air_tmin; ppt_7day,Air_trange; Air_tmean
+Sam,max,A,2,Solar_daily; WL_daily_max; Air_tmax; Air_tmin; GWT_max_2day; GWL_max; ppt_7day; GWT_range,Air_trange; WL_daily_range; GWL_range; Air_tmean; GWT_mean_2day; GWL_mean; GWT_min_2day; GWL_min; WL_daily_mean; WL_daily_min
+Sam,max,B,2,Solar_daily; Air_tmax; Air_tmin; ppt_7day,Air_trange; Air_tmean
+Sam,max,A,3,Solar_daily; WL_daily_mean; Air_tmax; Air_tmin; GWT_min; GWL_max; ppt_7day; WL_daily_range,Air_trange; GWT_range; GWL_range; Air_tmean; GWT_mean; GWL_mean; GWT_max; GWL_min; WL_daily_min; WL_max_3day
+Sam,max,B,3,Solar_daily; Air_tmax; Air_tmin; ppt_7day,Air_trange; Air_tmean
+Sam,max,A,4,Solar_daily; WL_daily_max; Air_tmax; Air_tmin; GWT_max_7day; GWL_max; ppt; GWT_range,Air_trange; WL_daily_range; GWL_range; GWT_mean_7day; Air_tmean; GWT_min_7day; GWL_mean; GWL_min; WL_daily_mean; WL_daily_min
+Sam,max,B,4,Solar_daily; Air_tmax; Air_tmin; ppt,Air_trange; Air_tmean
+Sam,max,A,5,Solar_daily; WL_daily_max; Air_tmax; Air_tmin; GWL_max; ppt_7day,Air_trange; WL_daily_range; GWT_range; GWL_range; Air_tmean; GWT_mean; GWL_mean; GWT_max; GWL_min; WL_daily_mean; WL_daily_min; GWT_min
+Sam,max,B,5,Solar_daily; Air_tmax; Air_tmin; ppt_7day,Air_trange; Air_tmean

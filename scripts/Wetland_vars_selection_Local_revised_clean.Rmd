@@ -1,0 +1,244 @@
+---
+title: "Local wetland predictor selection"
+author: "Michael Krochta"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+## Data and predictors
+
+```{r}
+library(tidyverse)
+library(mgcv)
+library(lubridate)
+
+df <- read.csv("C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/data/daily_wetlands_dataset.csv")
+stopifnot(all(c("Site", "Datetime") %in% names(df)))
+df$Datetime <- as.Date(df$Datetime, format = "%m/%d/%Y")
+if (anyNA(df$Datetime)) stop("Datetime contains missing/unparseable dates; check input date format.")
+
+responses <- c("mean_WT", "max_WT", "range_WT")
+stopifnot(all(responses %in% names(df)))
+
+predictor_groups <- list(
+  Solar    = c("Solar_daily", "Solar_2d", "Solar_3d", "Solar_7d"),
+  WL_mean  = c("WL_daily_mean", "WL_mean_2day", "WL_mean_3day", "WL_mean_7day"),
+  WL_max   = c("WL_daily_max", "WL_max_2day", "WL_max_3day", "WL_max_7day"),
+  WL_min   = c("WL_daily_min", "WL_min_2day", "WL_min_3day", "WL_min_7day"),
+  Air_tmean = c("Air_tmean", "Air_tmean_2day", "Air_tmean_3day", "Air_tmean_7day"),
+  Air_tmax = c("Air_tmax", "Air_tmax_2day", "Air_tmax_3day", "Air_tmax_7day"),
+  Air_tmin = c("Air_tmin", "Air_tmin_2day", "Air_tmin_3day", "Air_tmin_7day"),
+  GWT_mean = c("GWT_mean", "GWT_mean_2day", "GWT_mean_3day", "GWT_mean_7day"),
+  GWT_max  = c("GWT_max", "GWT_max_2day", "GWT_max_3day", "GWT_max_7day"),
+  GWT_min  = c("GWT_min", "GWT_min_2day", "GWT_min_3day", "GWT_min_7day"),
+  GWL_mean = c("GWL_mean", "GWL_mean_2day", "GWL_mean_3day", "GWL_mean_7day"),
+  GWL_max  = c("GWL_max", "GWL_max_2day", "GWL_max_3day", "GWL_max_7day"),
+  GWL_min  = c("GWL_min", "GWL_min_2day", "GWL_min_3day", "GWL_min_7day"),
+  ppt = c("ppt", "ppt_7day")
+)
+
+# Site-level constants (Elev_m, Size_km2) are excluded from local models.
+static_predictors <- c(
+  "Air_trange", "WL_daily_range", "GWT_range", "GWL_range",
+  "Water_area_m2_3d"
+)
+
+```
+
+## GAM predictor selection
+
+Temporal representations are compared using five-fold week-blocked CV and common complete-case observations within each predictor group.
+
+```{r}
+make_gam_weekly_folds <- function(data, k = 5, seed = 42) {
+  week_id <- lubridate::floor_date(as.Date(data$Datetime), unit = "week", week_start = 1)
+  weeks <- unique(week_id)
+  if (length(weeks) < k) {
+    stop("Not enough distinct weeks for ", k, "-fold GAM CV (found ",
+         length(weeks), ").")
+  }
+  set.seed(seed)
+  weeks <- sample(weeks)
+  week_groups <- split(weeks, rep(seq_len(k), length.out = length(weeks)))
+  lapply(week_groups, function(w) which(week_id %in% w))
+}
+
+select_gam_predictors_site <- function(train_data, response_var,
+                                       k_folds = 5, seed = 42) {
+  stopifnot(length(unique(stats::na.omit(train_data$Site))) == 1)
+  if (!response_var %in% names(train_data)) stop("Missing response: ", response_var)
+
+  purrr::imap_dfr(predictor_groups, function(vars, group_name) {
+    existing <- intersect(vars, names(train_data))
+    if (!length(existing)) return(tibble::tibble())
+
+    # Compare candidates on the same complete-case observations.
+    repeat {
+      common <- train_data %>%
+        dplyr::select(dplyr::all_of(c("Datetime", response_var, existing))) %>%
+        tidyr::drop_na()
+      if (!length(existing) || nrow(common) < 10) break
+      eligible <- vapply(existing, function(v) {
+        is.numeric(common[[v]]) &&
+          length(unique(common[[v]])) >= 2
+      }, logical(1))
+      if (all(eligible)) break
+      existing <- existing[eligible]
+    }
+    if (!length(existing) || nrow(common) < 10) {
+      warning("Skipping group ", group_name, " for ", response_var,
+              ": insufficient complete observations or variation.")
+      return(tibble::tibble())
+    }
+    if (length(unique(lubridate::floor_date(common$Datetime,
+                 unit = "week", week_start = 1))) < k_folds) {
+      warning("Skipping group ", group_name, " for ", response_var,
+              ": fewer than ", k_folds, " distinct weeks.")
+      return(tibble::tibble())
+    }
+
+    folds <- make_gam_weekly_folds(common, k = k_folds, seed = seed)
+    scores <- purrr::map_dfr(existing, function(v) {
+      predictions <- rep(NA_real_, nrow(common))
+      for (holdout in folds) {
+        training <- common[-holdout, , drop = FALSE]
+        n_unique <- length(unique(training[[v]]))
+        # Use a smooth when sufficient unique values are available.
+        form <- if (n_unique >= 5) {
+          stats::as.formula(paste0(response_var, " ~ s(`", v, "`, k = 5)"))
+        } else {
+          stats::reformulate(v, response = response_var)
+        }
+        fit <- mgcv::gam(form, data = training, method = "REML")
+        predictions[holdout] <- as.numeric(stats::predict(
+          fit, newdata = common[holdout, , drop = FALSE]
+        ))
+      }
+      tibble::tibble(predictor = v,
+                     cv_rmse = sqrt(mean((common[[response_var]] - predictions)^2)))
+    })
+    scores %>%
+      dplyr::arrange(cv_rmse, match(predictor, existing)) %>%
+      dplyr::slice(1) %>%
+      dplyr::mutate(group = group_name, n = nrow(common), .before = 1)
+  })
+}
+
+# Called on training data within each outer CV fold by the modeling script.
+select_for_local_site <- function(train_data, response_var, k = 5, seed = 42) {
+  selection <- select_gam_predictors_site(train_data, response_var,
+                                          k_folds = k, seed = seed)
+  statics <- intersect(static_predictors, names(train_data))
+  statics <- statics[vapply(statics, function(v) {
+    x <- train_data[[v]]
+    is.numeric(x) && length(unique(x[is.finite(x)])) >= 2
+  }, logical(1))]
+  list(predictors = unique(c(selection$predictor, statics)),
+       selection = selection)
+}
+```
+
+## Final local-model datasets
+
+These full-data selections are for final refits. The modeling script runs selection separately within each outer training fold for performance evaluation.
+
+```{r}
+sites <- sort(unique(stats::na.omit(df$Site)))
+site_response_data <- list()
+selection_rows <- list()
+summary_rows <- list()
+
+for (s in sites) {
+  df_site <- df %>% dplyr::filter(Site == s)
+  site_response_data[[s]] <- list()
+
+  for (resp in responses) {
+    result <- select_for_local_site(df_site, resp, k = 5)
+    chosen <- result$predictors
+    base_cols <- c("Site", "Datetime", resp)
+    final_df <- df_site %>%
+      dplyr::select(dplyr::all_of(unique(c(base_cols, chosen))))
+    site_response_data[[s]][[resp]] <- final_df
+
+    selection_rows[[length(selection_rows) + 1L]] <-
+      result$selection %>% dplyr::mutate(Site = s, response = resp, .before = 1)
+    summary_rows[[length(summary_rows) + 1L]] <- tibble::tibble(
+      Site = s, response = resp,
+      n_predictors = length(chosen),
+      predictors = paste(chosen, collapse = "; ")
+    )
+  }
+}
+
+site_gam_selection <- dplyr::bind_rows(selection_rows)
+site_selection_summary <- dplyr::bind_rows(summary_rows)
+print(site_selection_summary)
+```
+
+## Save outputs
+
+```{r}
+output_dir <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models/data/local_mod_data"
+if (!dir.exists(output_dir)) stop("Output directory does not exist: ", output_dir)
+
+for (s in names(site_response_data)) {
+  for (resp in names(site_response_data[[s]])) {
+    fn <- file.path(output_dir, paste0(s, "_", resp, "_model_data_revised.csv"))
+    utils::write.csv(site_response_data[[s]][[resp]], fn, row.names = FALSE)
+  }
+}
+
+utils::write.csv(site_gam_selection,
+                 file.path(output_dir, "site_gam_selection_revised.csv"),
+                 row.names = FALSE)
+utils::write.csv(site_selection_summary,
+                 file.path(output_dir, "site_selection_summary_revised.csv"),
+                 row.names = FALSE)
+
+selected_long <- purrr::imap_dfr(site_response_data, function(by_response, site) {
+  purrr::imap_dfr(by_response, function(dat, resp) {
+    predictors <- setdiff(names(dat), c("Site", "Datetime", resp))
+    tibble::tibble(Site = site, response = resp, predictor = predictors)
+  })
+}) %>% dplyr::arrange(Site, response, predictor)
+
+utils::write.csv(selected_long,
+                 file.path(output_dir, "site_model_selected_predictors_long_revised.csv"),
+                 row.names = FALSE)
+```
+
+## Outer-fold selection frequency
+
+Summarize selections exported by the local modeling script.
+
+```{r local_outer_fold_frequency}
+selection_path <- file.path(
+  "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models",
+  "results", "local_results", "local_gam_fold_selections_revised.csv"
+)
+
+stopifnot(file.exists(selection_path))
+
+fold_sel <- readr::read_csv(selection_path, show_col_types = FALSE)
+
+local_frequency <- fold_sel %>%
+  dplyr::distinct(Site, Metric, Set, fold, group, predictor) %>%
+  dplyr::count(Site, Metric, Set, group, predictor,
+               name = "n_selected") %>%
+  dplyr::arrange(Site, Metric, Set, group,
+                 dplyr::desc(n_selected))
+
+print(local_frequency, n = Inf)
+
+readr::write_csv(
+  local_frequency,
+  file.path(dirname(selection_path),
+            "supp_local_temporal_selection_frequency.csv")
+)
+```
+
+

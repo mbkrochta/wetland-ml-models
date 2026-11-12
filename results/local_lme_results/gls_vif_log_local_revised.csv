@@ -1,0 +1,211 @@
+Site,Metric,Set,fold,kept,dropped
+Anvil,max,A,1,Solar_daily; Air_tmean; Air_tmin_7day; GWL_max; ppt; Air_trange; GWT_range; GWL_range; Water_area_m2_3d,GWT_mean_7day; Air_tmax; WL_mean_7day; GWT_max_7day; GWL_mean; WL_min_7day; GWL_min_3day; GWT_min_7day; WL_max_7day; WL_daily_range
+Anvil,max,B,1,Solar_daily; Air_tmean; Air_tmin_7day; ppt; Air_trange,Air_tmax
+Anvil,max,A,2,Solar_daily; Air_tmax; Air_tmin; GWT_max_7day; GWL_min; ppt; WL_daily_range; GWT_range; GWL_range,Air_trange; GWT_mean_7day; Air_tmean; WL_mean_7day; GWT_min_7day; GWL_mean_7day; WL_min_7day; GWL_max_7day; WL_max_7day; Water_area_m2_3d
+Anvil,max,B,2,Solar_daily; Air_tmax; Air_tmin; ppt,Air_trange; Air_tmean
+Anvil,max,A,3,Solar_daily; Air_tmean; Air_tmin_7day; GWL_max; ppt; Air_trange; GWL_range; Water_area_m2_3d,WL_daily_range; GWT_range; Air_tmax; GWT_mean; WL_daily_mean; GWL_mean; GWT_max; GWL_min_3day; WL_daily_max; GWT_min; WL_daily_min
+Anvil,max,B,3,Solar_daily; Air_tmean; Air_tmin_7day; ppt; Air_trange,Air_tmax
+Anvil,max,A,4,Solar_2d; Air_tmin; GWL_max; ppt; GWT_range; GWL_range; Water_area_m2_3d,Air_trange; GWT_mean_7day; Air_tmean; GWT_min_7day; GWL_mean; WL_max_7day; WL_min_7day; GWL_min_7day; GWT_max_7day; WL_daily_range; WL_daily_mean; Air_tmax
+Anvil,max,B,4,Solar_2d; Air_tmin; ppt,Air_trange; Air_tmean; Air_tmax
+Anvil,max,A,5,Solar_7d; Air_tmax; Air_tmin; ppt; GWT_range; GWL_range; Water_area_m2_3d,Air_trange; WL_daily_range; GWT_mean_7day; Air_tmean; GWL_max; GWT_max_7day; WL_daily_mean; GWL_min_3day; WL_daily_max; WL_daily_min; GWT_min_7day; GWL_mean
+Anvil,max,B,5,Solar_7d; Air_tmax; Air_tmin; ppt,Air_trange; Air_tmean
+Anvil,mean,A,1,Air_tmin_3day; GWL_max; ppt; Air_trange; WL_daily_range; GWT_range; GWL_range; Water_area_m2_3d,GWT_mean_7day; Air_tmax; WL_mean_7day; GWT_min_7day; GWL_mean; WL_min_7day; GWL_min_7day; WL_max_7day; GWT_max_7day; Air_tmean; Solar_2d
+Anvil,mean,B,1,Solar_2d; Air_tmin_3day; ppt; Air_trange,Air_tmax; Air_tmean
+Anvil,mean,A,2,Solar_3d; Air_tmax; Air_tmin; GWT_max_7day; GWL_min; ppt; WL_daily_range; GWT_range; GWL_range,Air_trange; GWT_mean_7day; Air_tmean; WL_daily_mean; GWT_min_7day; GWL_mean_2day; WL_max_7day; GWL_max_7day; WL_daily_min; Water_area_m2_3d
+Anvil,mean,B,2,Solar_3d; Air_tmax; Air_tmin; ppt,Air_trange; Air_tmean
+Anvil,mean,A,3,Solar_daily; Air_tmean; Air_tmin_7day; GWL_max_7day; ppt; Air_trange; GWT_range; GWL_range; Water_area_m2_3d,WL_daily_range; Air_tmax; GWL_mean_7day; GWT_mean_2day; WL_daily_mean; GWT_max_3day; WL_daily_min; GWL_min_7day; GWT_min_2day; WL_daily_max
+Anvil,mean,B,3,Solar_daily; Air_tmean; Air_tmin_7day; ppt; Air_trange,Air_tmax
+Anvil,mean,A,4,Solar_3d; Air_tmin; GWL_max; ppt; GWT_range; GWL_range; Water_area_m2_3d,Air_trange; GWT_mean_7day; Air_tmean; WL_daily_max; GWT_max_7day; GWL_mean; WL_min_7day; GWL_min_7day; GWT_min_7day; WL_daily_range; WL_daily_mean; Air_tmax
+Anvil,mean,B,4,Solar_3d; Air_tmin; ppt,Air_trange; Air_tmean; Air_tmax
+Anvil,mean,A,5,Solar_7d; Air_tmax; Air_tmin; GWT_min_7day; ppt; WL_daily_range; GWT_range,Air_trange; GWL_range; GWT_mean_7day; Air_tmean; WL_daily_mean; GWT_max_7day; GWL_mean; WL_max_7day; GWL_min; WL_daily_min; Water_area_m2_3d; GWL_max
+Anvil,mean,B,5,Solar_7d; Air_tmax; Air_tmin; ppt,Air_trange; Air_tmean
+Anvil,range,A,1,Solar_daily; Air_tmean; Air_tmin_7day; GWL_max; ppt; Air_trange; WL_daily_range; GWT_range; Water_area_m2_3d,GWL_range; GWT_mean_7day; Air_tmax; WL_daily_mean; GWT_max_7day; GWL_mean; WL_min_7day; GWL_min; GWT_min_7day; WL_daily_max
+Anvil,range,B,1,Solar_daily; Air_tmean; Air_tmin_7day; ppt; Air_trange,Air_tmax
+Anvil,range,A,2,Solar_daily; Air_tmax; Air_tmin; GWL_max_7day; ppt; WL_daily_range; GWL_range; Water_area_m2_3d,Air_trange; GWT_range; Air_tmean; GWL_mean_7day; GWT_mean; WL_mean_3day; GWT_min; GWL_min_7day; WL_min_3day; GWT_max; WL_max_7day
+Anvil,range,B,2,Solar_daily; Air_tmax; Air_tmin; ppt,Air_trange; Air_tmean
+Anvil,range,A,3,Solar_daily; Air_tmean_3day; Air_tmin_7day; GWL_max; ppt; Air_trange; WL_daily_range; Water_area_m2_3d,GWT_range; GWL_range; WL_daily_mean; GWT_mean; GWL_mean; WL_daily_min; GWT_max; GWL_min; Air_tmax; GWT_min; WL_max_2day
+Anvil,range,B,3,Solar_daily; Air_tmean_3day; Air_tmin_7day; ppt; Air_trange,Air_tmax
+Anvil,range,A,4,Solar_daily; Air_tmax; Air_tmin; GWL_max; ppt; WL_daily_range; GWT_range; Water_area_m2_3d,Air_trange; GWL_range; GWT_mean_7day; GWT_min_7day; GWL_mean; WL_mean_7day; WL_max_7day; GWL_min; Air_tmean_2day; WL_min_3day; GWT_max_7day
+Anvil,range,B,4,Solar_daily; Air_tmax; Air_tmin; ppt,Air_trange; Air_tmean_2day
+Anvil,range,A,5,Solar_daily; Air_tmax_7day; GWL_max; ppt; Air_trange; WL_daily_range; GWT_range; GWL_range; Water_area_m2_3d,Air_tmean_7day; GWT_mean_7day; WL_daily_mean; GWT_max_7day; GWL_min_3day; WL_min_3day; GWL_mean_3day; WL_daily_max; Air_tmin_7day; GWT_min_7day
+Anvil,range,B,5,Solar_daily; Air_tmax_7day; Air_tmin_7day; ppt; Air_trange,Air_tmean_7day
+Butte,max,A,1,Solar_daily; WL_daily_mean; Air_tmax; Air_tmin; GWT_min_7day; ppt; WL_daily_range; GWT_range,Air_trange; GWL_range; GWT_mean_7day; Air_tmean; GWT_max_7day; GWL_mean; WL_daily_min; GWL_min; GWL_max; WL_max_7day
+Butte,max,B,1,Solar_daily; Air_tmax; Air_tmin; ppt,Air_trange; Air_tmean
+Butte,max,A,2,Solar_3d; WL_max_2day; Air_tmin; GWT_min_7day; ppt_7day; WL_daily_range; GWT_range,Air_trange; GWL_range; GWT_mean_7day; Air_tmean; GWT_max_7day; GWL_mean; WL_daily_min; GWL_min; WL_daily_mean; GWL_max; Air_tmax
+Butte,max,B,2,Solar_3d; Air_tmax; Air_tmin; ppt_7day,Air_trange; Air_tmean
+Butte,max,A,3,Solar_daily; WL_max_7day; Air_tmax; Air_tmin; GWT_min_7day; ppt; WL_daily_range; GWT_range,Air_trange; GWL_range; GWT_mean_7day; Air_tmean; GWT_max_7day; GWL_mean; GWL_min; WL_mean_7day; GWL_max; WL_daily_min
+Butte,max,B,3,Solar_daily; Air_tmax; Air_tmin; ppt,Air_trange; Air_tmean
+Butte,max,A,4,Solar_daily; WL_daily_mean; Air_tmax; Air_tmin; GWT_min_7day; ppt; WL_daily_range; GWT_range,Air_trange; GWL_range; GWT_mean_7day; Air_tmean; GWT_max_7day; GWL_mean; WL_daily_min; GWL_min; GWL_max; WL_max_7day
+Butte,max,B,4,Solar_daily; Air_tmax; Air_tmin; ppt,Air_trange; Air_tmean
+Butte,max,A,5,Solar_daily; WL_daily_mean; Air_tmax; Air_tmin; GWT_min_7day; ppt_7day; WL_daily_range; GWT_range,Air_trange; GWL_range; GWT_mean_7day; Air_tmean; GWT_max_7day; GWL_mean; WL_daily_min; GWL_min; GWL_max; WL_max_3day
+Butte,max,B,5,Solar_daily; Air_tmax; Air_tmin; ppt_7day,Air_trange; Air_tmean
+Butte,mean,A,1,Solar_daily; WL_max_3day; Air_tmin; GWT_min_7day; ppt_7day; Air_trange; WL_daily_range; GWT_range,GWL_range; GWT_mean_7day; GWT_max_7day; GWL_mean; Air_tmean_2day; WL_daily_min; GWL_min; WL_daily_mean; Air_tmax_2day; GWL_max
+Butte,mean,B,1,Solar_daily; Air_tmin; ppt_7day; Air_trange,Air_tmean_2day; Air_tmax_2day
+Butte,mean,A,2,Solar_3d; WL_daily_mean; Air_tmin; GWT_min_7day; ppt_7day; Air_trange; WL_daily_range; GWT_range,GWL_range; GWT_mean_7day; GWT_max_7day; GWL_mean; WL_daily_min; Air_tmean_2day; GWL_min; GWL_max; WL_max_7day; Air_tmax_3day
+Butte,mean,B,2,Solar_3d; Air_tmin; ppt_7day; Air_trange,Air_tmean_2day; Air_tmax_3day
+Butte,mean,A,3,Solar_daily; WL_min_7day; Air_tmin; GWT_min_7day; ppt_7day; Air_trange; WL_daily_range; GWT_range,GWT_mean_7day; GWT_max_7day; GWL_mean; WL_mean_7day; Air_tmean_2day; GWL_min_2day; Air_tmax_2day; GWL_max; GWL_range; WL_max_7day
+Butte,mean,B,3,Solar_daily; Air_tmin; ppt_7day; Air_trange,Air_tmean_2day; Air_tmax_2day
+Butte,mean,A,4,Solar_daily; WL_daily_min; Air_tmin; GWT_min_7day; ppt_7day; Air_trange; GWT_range; GWL_range,GWT_mean_7day; Air_tmean; GWT_max_7day; GWL_max; GWL_min_2day; WL_max_7day; GWL_mean; Air_tmax_2day; WL_daily_range; WL_mean_7day
+Butte,mean,B,4,Solar_daily; Air_tmin; ppt_7day; Air_trange,Air_tmean; Air_tmax_2day
+Butte,mean,A,5,Solar_daily; WL_daily_mean; Air_tmin; GWT_min_7day; ppt_7day; Air_trange; WL_daily_range; GWT_range,GWL_range; GWT_mean_7day; GWT_max_7day; GWL_mean; Air_tmean_2day; WL_daily_min; GWL_min; GWL_max; Air_tmax_2day; WL_max_3day
+Butte,mean,B,5,Solar_daily; Air_tmin; ppt_7day; Air_trange,Air_tmean_2day; Air_tmax_2day
+Butte,range,A,1,Solar_2d; WL_daily_mean; Air_tmax; Air_tmin; GWT_min_7day; ppt; WL_daily_range; GWT_range,Air_trange; GWT_mean_7day; Air_tmean; GWT_max_7day; GWL_max_7day; WL_daily_min; GWL_min; GWL_mean_7day; WL_max_7day; GWL_range
+Butte,range,B,1,Solar_2d; Air_tmax; Air_tmin; ppt,Air_trange; Air_tmean
+Butte,range,A,2,Solar_daily; WL_max_2day; Air_tmin_2day; GWT_min_7day; ppt; Air_trange; WL_daily_range; GWT_range,GWT_mean_7day; Air_tmax; GWT_max_7day; GWL_mean_7day; WL_mean_7day; WL_daily_min; GWL_max_7day; Air_tmean; GWL_min_7day; GWL_range
+Butte,range,B,2,Solar_daily; Air_tmin_2day; ppt; Air_trange,Air_tmax; Air_tmean
+Butte,range,A,3,Solar_daily; WL_max_2day; Air_tmin_3day; GWT_min_7day; ppt; Air_trange; WL_daily_range; GWT_range,GWT_mean_7day; Air_tmax; GWT_max_7day; GWL_max; GWL_mean; WL_mean_7day; WL_daily_min; GWL_min_7day; GWL_range; Air_tmean
+Butte,range,B,3,Solar_daily; Air_tmin_3day; ppt; Air_trange,Air_tmax; Air_tmean
+Butte,range,A,4,Solar_daily; WL_daily_min; Air_tmean; Air_tmin_7day; GWT_min_7day; ppt; Air_trange; GWT_range; GWL_range,WL_daily_range; GWT_mean_7day; Air_tmax; GWT_max_7day; GWL_min; GWL_mean; WL_daily_mean; GWL_max_7day; WL_daily_max
+Butte,range,B,4,Solar_daily; Air_tmean; Air_tmin_7day; ppt; Air_trange,Air_tmax
+Butte,range,A,5,Solar_daily; WL_daily_min; Air_tmax; Air_tmin; GWT_min_7day; ppt; GWT_range; GWL_range,Air_trange; WL_daily_range; GWT_mean_7day; Air_tmean; GWT_max_7day; GWL_mean; WL_daily_mean; WL_daily_max; GWL_max_7day; GWL_min_7day
+Butte,range,B,5,Solar_daily; Air_tmax; Air_tmin; ppt,Air_trange; Air_tmean
+Cooper,max,A,1,Solar_daily; Air_tmean; Air_tmin_7day; ppt; Air_trange,Air_tmax
+Cooper,max,B,1,Solar_daily; Air_tmean; Air_tmin_7day; ppt; Air_trange,Air_tmax
+Cooper,max,A,2,Solar_daily; Air_tmean; Air_tmin_7day; ppt; Air_trange,Air_tmax
+Cooper,max,B,2,Solar_daily; Air_tmean; Air_tmin_7day; ppt; Air_trange,Air_tmax
+Cooper,max,A,3,Solar_daily; Air_tmin_3day; ppt; Air_trange,Air_tmax; Air_tmean
+Cooper,max,B,3,Solar_daily; Air_tmin_3day; ppt; Air_trange,Air_tmax; Air_tmean
+Cooper,max,A,4,Solar_daily; Air_tmean_3day; Air_tmin_7day; ppt_7day; Air_trange,Air_tmax
+Cooper,max,B,4,Solar_daily; Air_tmean_3day; Air_tmin_7day; ppt_7day; Air_trange,Air_tmax
+Cooper,max,A,5,Solar_daily; Air_tmin_3day; ppt; Air_trange,Air_tmax; Air_tmean
+Cooper,max,B,5,Solar_daily; Air_tmin_3day; ppt; Air_trange,Air_tmax; Air_tmean
+Cooper,mean,A,1,Solar_daily; Air_tmax; Air_tmin; ppt,Air_trange; Air_tmean
+Cooper,mean,B,1,Solar_daily; Air_tmax; Air_tmin; ppt,Air_trange; Air_tmean
+Cooper,mean,A,2,Solar_daily; Air_tmin_3day; ppt_7day; Air_trange,Air_tmax; Air_tmean
+Cooper,mean,B,2,Solar_daily; Air_tmin_3day; ppt_7day; Air_trange,Air_tmax; Air_tmean
+Cooper,mean,A,3,Solar_daily; Air_tmin_3day; ppt; Air_trange,Air_tmean_2day; Air_tmax_2day
+Cooper,mean,B,3,Solar_daily; Air_tmin_3day; ppt; Air_trange,Air_tmean_2day; Air_tmax_2day
+Cooper,mean,A,4,Solar_daily; Air_tmin_3day; ppt; Air_trange,Air_tmax; Air_tmean
+Cooper,mean,B,4,Solar_daily; Air_tmin_3day; ppt; Air_trange,Air_tmax; Air_tmean
+Cooper,mean,A,5,Solar_daily; Air_tmin_3day; ppt; Air_trange,Air_tmax_3day; Air_tmean
+Cooper,mean,B,5,Solar_daily; Air_tmin_3day; ppt; Air_trange,Air_tmax_3day; Air_tmean
+Cooper,range,A,1,Solar_daily; Air_tmean; Air_tmin_7day; ppt; Air_trange,Air_tmax
+Cooper,range,B,1,Solar_daily; Air_tmean; Air_tmin_7day; ppt; Air_trange,Air_tmax
+Cooper,range,A,2,Solar_daily; Air_tmin_3day; ppt; Air_trange,Air_tmax; Air_tmean
+Cooper,range,B,2,Solar_daily; Air_tmin_3day; ppt; Air_trange,Air_tmax; Air_tmean
+Cooper,range,A,3,Solar_daily; Air_tmean; Air_tmin_7day; ppt; Air_trange,Air_tmax
+Cooper,range,B,3,Solar_daily; Air_tmean; Air_tmin_7day; ppt; Air_trange,Air_tmax
+Cooper,range,A,4,Solar_daily; Air_tmin_3day; ppt; Air_trange,Air_tmax; Air_tmean
+Cooper,range,B,4,Solar_daily; Air_tmin_3day; ppt; Air_trange,Air_tmax; Air_tmean
+Cooper,range,A,5,Solar_daily; Air_tmean; Air_tmin_7day; ppt; Air_trange,Air_tmax
+Cooper,range,B,5,Solar_daily; Air_tmean; Air_tmin_7day; ppt; Air_trange,Air_tmax
+Crater,max,A,1,WL_max_7day; Air_tmin_3day; ppt; Air_trange; WL_daily_range; GWT_range; Water_area_m2_3d,WL_mean_7day; GWL_mean_7day; GWT_max; WL_min_7day; GWT_min_3day; GWL_min_7day; Air_tmean_3day; GWL_max_7day; GWL_range; Air_tmax_2day; GWT_mean; Solar_3d
+Crater,max,B,1,Solar_3d; Air_tmin_3day; ppt; Air_trange,Air_tmean_3day; Air_tmax_2day
+Crater,max,A,2,Solar_7d; Air_tmean_3day; Air_tmin_7day; ppt; Air_trange; WL_daily_range; GWT_range; Water_area_m2_3d,GWT_mean_7day; GWL_mean_7day; WL_min_7day; GWT_min_7day; GWL_min_7day; WL_mean_7day; GWT_max_7day; GWL_range; Air_tmax_7day; GWL_max_7day; WL_max_3day
+Crater,max,B,2,Solar_7d; Air_tmean_3day; Air_tmin_7day; ppt; Air_trange,Air_tmax_7day
+Crater,max,A,3,Solar_7d; WL_max_3day; Air_tmin_3day; ppt; Air_trange; WL_daily_range; GWT_range; Water_area_m2_3d,GWT_mean_7day; GWL_mean_7day; GWT_min_7day; WL_mean_3day; WL_min_3day; GWL_min_7day; GWL_max_7day; Air_tmean_2day; GWL_range; Air_tmax_3day; GWT_max_7day
+Crater,max,B,3,Solar_7d; Air_tmin_3day; ppt; Air_trange,Air_tmean_2day; Air_tmax_3day
+Crater,max,A,4,Solar_7d; WL_mean_7day; Air_tmin; ppt; Air_trange; WL_daily_range; GWT_range; Water_area_m2_3d,GWT_mean_7day; GWL_mean_7day; WL_min_7day; GWT_min_7day; GWL_min_7day; WL_max_2day; Air_tmean_2day; GWL_range; GWL_max_7day; GWT_max_7day; Air_tmax_3day
+Crater,max,B,4,Solar_7d; Air_tmin; ppt; Air_trange,Air_tmean_2day; Air_tmax_3day
+Crater,max,A,5,WL_mean_7day; Air_tmax_7day; Air_tmin; ppt; Air_trange; WL_daily_range; GWT_range; Water_area_m2_3d,GWT_mean_7day; GWT_min_7day; GWL_mean; WL_min_7day; GWL_min_2day; WL_daily_max; GWL_max; GWL_range; Air_tmean_3day; Solar_7d; GWT_max_7day
+Crater,max,B,5,Solar_7d; Air_tmax_7day; Air_tmin; ppt; Air_trange,Air_tmean_3day
+Crater,mean,A,1,WL_max_7day; Air_tmin_2day; ppt_7day; Air_trange; WL_daily_range; GWT_range; Water_area_m2_3d,WL_mean_7day; GWL_mean_7day; GWT_max; WL_min_7day; GWT_min_3day; GWL_min_7day; GWL_max_7day; Air_tmax_2day; GWL_range; Air_tmean_3day; GWT_mean; Solar_3d
+Crater,mean,B,1,Solar_3d; Air_tmin_2day; ppt_7day; Air_trange,Air_tmax_2day; Air_tmean_3day
+Crater,mean,A,2,Solar_7d; Air_tmean_3day; Air_tmin_7day; ppt; Air_trange; WL_daily_range; GWT_range; Water_area_m2_3d,GWT_mean_7day; GWL_mean_7day; WL_min_7day; GWT_min_7day; GWL_min_7day; WL_mean_7day; GWT_max_7day; GWL_range; Air_tmax_7day; GWL_max_7day; WL_max_3day
+Crater,mean,B,2,Solar_7d; Air_tmean_3day; Air_tmin_7day; ppt; Air_trange,Air_tmax_7day
+Crater,mean,A,3,Solar_7d; WL_max_2day; Air_tmin_3day; ppt; Air_trange; WL_daily_range; GWT_range; Water_area_m2_3d,GWT_mean_7day; GWL_mean_7day; GWT_min_7day; WL_mean_3day; WL_min_3day; GWL_min_7day; GWL_max_7day; Air_tmean_2day; GWL_range; Air_tmax_3day; GWT_max_7day
+Crater,mean,B,3,Solar_7d; Air_tmin_3day; ppt; Air_trange,Air_tmean_2day; Air_tmax_3day
+Crater,mean,A,4,Solar_3d; WL_min_3day; Air_tmin; ppt_7day; Air_trange; WL_daily_range; GWT_range; Water_area_m2_3d,GWT_mean_7day; GWL_mean_7day; GWT_min_7day; WL_mean_2day; GWL_min_7day; WL_daily_max; Air_tmean_2day; GWL_range; GWL_max_7day; GWT_max_7day; Air_tmax_3day
+Crater,mean,B,4,Solar_3d; Air_tmin; ppt_7day; Air_trange,Air_tmean_2day; Air_tmax_3day
+Crater,mean,A,5,WL_min_7day; Air_tmax_7day; Air_tmin_3day; ppt; Air_trange; WL_daily_range; GWT_range; Water_area_m2_3d,GWT_mean_7day; GWT_min_7day; GWL_mean; WL_mean_7day; GWL_min_2day; WL_daily_max; GWL_max; Air_tmean_3day; GWL_range; Solar_7d; GWT_max_7day
+Crater,mean,B,5,Solar_7d; Air_tmax_7day; Air_tmin_3day; ppt; Air_trange,Air_tmean_3day
+Crater,range,A,1,Solar_daily; WL_min_2day; Air_tmax_7day; ppt; Air_trange; WL_daily_range; Water_area_m2_3d,GWT_range; Air_tmean_7day; GWL_mean; GWT_mean; WL_daily_max; GWT_max; WL_daily_mean; GWL_min_7day; GWL_max; GWL_range; Air_tmin_7day; GWT_min
+Crater,range,B,1,Solar_daily; Air_tmin_7day; ppt; Air_trange,Air_tmean_7day; Air_tmax_7day
+Crater,range,A,2,Solar_daily; WL_daily_max; Air_tmax; Air_tmin_7day; ppt; Air_trange; WL_daily_range; Water_area_m2_3d,GWT_range; GWT_mean; WL_daily_mean; GWL_min_3day; GWT_max; GWL_max; WL_min_3day; GWT_min; Air_tmean_7day; GWL_range; GWL_mean_3day
+Crater,range,B,2,Solar_daily; Air_tmin_7day; ppt; Air_trange,Air_tmean_7day; Air_tmax
+Crater,range,A,3,Solar_daily; WL_daily_max; Air_tmax_3day; Air_tmin_7day; ppt; Air_trange; GWL_range; Water_area_m2_3d,WL_daily_range; GWT_range; GWT_mean; WL_daily_mean; GWL_min_3day; GWT_max; WL_daily_min; GWL_max; Air_tmean_7day; GWL_mean_3day; GWT_min
+Crater,range,B,3,Solar_daily; Air_tmax_3day; Air_tmin_7day; ppt; Air_trange,Air_tmean_7day
+Crater,range,A,4,Solar_daily; WL_min_3day; Air_tmax_7day; ppt; Air_trange; WL_daily_range; GWT_range; Water_area_m2_3d,Air_tmean_7day; GWL_mean_3day; GWT_mean_3day; WL_daily_mean; GWL_min_3day; GWT_min_7day; WL_daily_max; GWL_range; GWL_max_3day; Air_tmin_7day; GWT_max
+Crater,range,B,4,Solar_daily; Air_tmin_7day; ppt; Air_trange,Air_tmean_7day; Air_tmax_7day
+Crater,range,A,5,Solar_daily; WL_min_2day; Air_tmax; Air_tmin; ppt; WL_daily_range; Water_area_m2_3d,Air_trange; GWT_range; GWL_mean; Air_tmean; GWT_mean; WL_daily_max; GWL_max; GWT_min; WL_daily_mean; GWL_min_2day; GWL_range; GWT_max
+Crater,range,B,5,Solar_daily; Air_tmax; Air_tmin; ppt,Air_trange; Air_tmean
+Hideaway,max,A,1,Solar_2d; Air_tmean_3day; GWT_min_7day; GWL_max; ppt; Air_trange; GWT_range; Water_area_m2_3d,GWL_range; GWT_mean_7day; GWL_mean; GWT_max_7day; GWL_min; Air_tmin_3day; Air_tmax
+Hideaway,max,B,1,Solar_2d; Air_tmin_3day; ppt; Air_trange,Air_tmean_3day; Air_tmax
+Hideaway,max,A,2,Solar_2d; Air_tmax; Air_tmin; GWL_max_7day; ppt_7day; GWT_range; GWL_range; Water_area_m2_3d,Air_trange; GWT_mean_7day; GWL_mean_7day; Air_tmean; GWT_max_7day; GWL_min_7day; GWT_min_7day
+Hideaway,max,B,2,Solar_2d; Air_tmin; ppt_7day,Air_trange; Air_tmean; Air_tmax
+Hideaway,max,A,3,Solar_2d; Air_tmax; Air_tmin; GWT_min_7day; GWL_max; ppt; GWT_range; Water_area_m2_3d,Air_trange; GWL_range; GWT_mean_7day; Air_tmean; GWL_mean; GWT_max_7day; GWL_min
+Hideaway,max,B,3,Solar_2d; Air_tmax; Air_tmin; ppt,Air_trange; Air_tmean
+Hideaway,max,A,4,Solar_2d; Air_tmin_3day; GWT_min_7day; GWL_max; ppt_7day; Air_trange; GWT_range; Water_area_m2_3d,GWL_range; GWT_mean_7day; Air_tmax; GWL_mean; GWT_max_7day; GWL_min; Air_tmean
+Hideaway,max,B,4,Solar_2d; Air_tmin_3day; ppt_7day; Air_trange,Air_tmax; Air_tmean
+Hideaway,max,A,5,Solar_2d; Air_tmax; Air_tmin; GWL_max_7day; ppt; GWT_range; GWL_range; Water_area_m2_3d,Air_trange; GWT_mean_7day; GWL_mean_7day; Air_tmean; GWT_min_7day; GWL_min_7day; GWT_max_7day
+Hideaway,max,B,5,Solar_2d; Air_tmax; Air_tmin; ppt,Air_trange; Air_tmean
+Hideaway,mean,A,1,Solar_2d; Air_tmax; Air_tmin; GWT_min_7day; GWL_max; ppt; GWT_range; Water_area_m2_3d,Air_trange; GWL_range; GWT_mean_7day; Air_tmean; GWL_mean; GWT_max_7day; GWL_min
+Hideaway,mean,B,1,Solar_2d; Air_tmax; Air_tmin; ppt,Air_trange; Air_tmean
+Hideaway,mean,A,2,Solar_2d; Air_tmax; Air_tmin; GWL_max_7day; ppt_7day; GWT_range; GWL_range; Water_area_m2_3d,Air_trange; GWT_mean_7day; GWL_mean_7day; Air_tmean; GWT_max_7day; GWL_min_7day; GWT_min_7day
+Hideaway,mean,B,2,Solar_2d; Air_tmin; ppt_7day,Air_trange; Air_tmean; Air_tmax
+Hideaway,mean,A,3,Solar_3d; Air_tmax; Air_tmin; GWL_max; ppt; GWT_range; Water_area_m2_3d,Air_trange; GWL_range; GWT_mean_7day; Air_tmean; GWL_mean; GWT_max_7day; GWL_min; GWT_min_7day
+Hideaway,mean,B,3,Solar_3d; Air_tmax; Air_tmin; ppt,Air_trange; Air_tmean
+Hideaway,mean,A,4,Solar_2d; Air_tmax; Air_tmin; GWT_min_7day; GWL_max; ppt_7day; GWT_range; Water_area_m2_3d,Air_trange; GWL_range; GWT_mean_7day; GWL_mean; Air_tmean; GWT_max_7day; GWL_min
+Hideaway,mean,B,4,Solar_2d; Air_tmax; Air_tmin; ppt_7day,Air_trange; Air_tmean
+Hideaway,mean,A,5,Solar_2d; Air_tmax; Air_tmin; GWL_max_7day; ppt_7day; GWT_range; GWL_range; Water_area_m2_3d,Air_trange; GWT_mean_7day; GWL_mean_7day; Air_tmean; GWT_max_7day; GWL_min_7day; GWT_min_7day
+Hideaway,mean,B,5,Solar_2d; Air_tmax; Air_tmin; ppt_7day,Air_trange; Air_tmean
+Hideaway,range,A,1,Solar_daily; Air_tmin_3day; GWT_min_7day; GWL_max; ppt; Air_trange; GWT_range; Water_area_m2_3d,GWL_range; GWT_mean_7day; Air_tmean_3day; GWL_mean; GWT_max_7day; GWL_min; Air_tmax_3day
+Hideaway,range,B,1,Solar_daily; Air_tmin_3day; ppt; Air_trange,Air_tmean_3day; Air_tmax_3day
+Hideaway,range,A,2,Solar_daily; Air_tmin_3day; GWL_max_7day; ppt; Air_trange; GWT_range; GWL_range; Water_area_m2_3d,GWL_mean_7day; Air_tmax; GWT_mean_7day; GWL_min_7day; GWT_min_7day; Air_tmean; GWT_max
+Hideaway,range,B,2,Solar_daily; Air_tmin_3day; ppt; Air_trange,Air_tmax; Air_tmean
+Hideaway,range,A,3,Solar_daily; Air_tmax; Air_tmin; GWT_min_2day; GWL_max; ppt; GWT_range; Water_area_m2_3d,Air_trange; GWL_range; Air_tmean; GWL_mean; GWT_mean_3day; GWL_min; GWT_max_7day
+Hideaway,range,B,3,Solar_daily; Air_tmax; Air_tmin; ppt,Air_trange; Air_tmean
+Hideaway,range,A,4,Solar_daily; Air_tmin_3day; GWT_min_7day; GWL_max; ppt; Air_trange; GWT_range; Water_area_m2_3d,GWL_range; GWT_mean_7day; Air_tmax; GWL_mean; GWT_max_7day; GWL_min; Air_tmean
+Hideaway,range,B,4,Solar_daily; Air_tmin_3day; ppt; Air_trange,Air_tmax; Air_tmean
+Hideaway,range,A,5,Solar_daily; Air_tmax; Air_tmin; GWL_max_7day; ppt; GWT_range; GWL_range; Water_area_m2_3d,Air_trange; GWT_mean_7day; GWL_mean_7day; Air_tmean; GWT_min_7day; GWL_min_7day; GWT_max_7day
+Hideaway,range,B,5,Solar_daily; Air_tmax; Air_tmin; ppt,Air_trange; Air_tmean
+Pint,max,A,1,Solar_daily; Air_tmin_7day; GWT_min_7day; ppt_7day; Air_trange; WL_daily_range; GWT_range; GWL_range; Water_area_m2_3d,GWT_mean_7day; Air_tmean_7day; GWT_max_7day; GWL_mean_7day; WL_max_7day; WL_mean_3day; GWL_max_7day; WL_min_2day; Air_tmax_7day; GWL_min_7day
+Pint,max,B,1,Solar_daily; Air_tmin_7day; ppt_7day; Air_trange,Air_tmean_7day; Air_tmax_7day
+Pint,max,A,2,WL_max_3day; Air_tmin_7day; GWT_max_7day; ppt_7day; Air_trange; WL_daily_range; GWT_range; GWL_range; Water_area_m2_3d,Air_tmean_7day; GWT_mean_7day; GWT_min_7day; GWL_mean_7day; WL_mean_3day; GWL_min_7day; WL_min_3day; Air_tmax_7day; GWL_max_7day; Solar_7d
+Pint,max,B,2,Solar_7d; Air_tmin_7day; ppt_7day; Air_trange,Air_tmean_7day; Air_tmax_7day
+Pint,max,A,3,WL_max_3day; Air_tmin_7day; GWT_min_7day; ppt_7day; Air_trange; WL_daily_range; GWT_range; GWL_range; Water_area_m2_3d,Air_tmean_7day; GWT_mean_7day; GWT_max_7day; WL_mean_3day; GWL_mean_2day; WL_min_2day; GWL_min_3day; Solar_7d; GWL_max_2day; Air_tmax_7day
+Pint,max,B,3,Solar_7d; Air_tmin_7day; ppt_7day; Air_trange,Air_tmean_7day; Air_tmax_7day
+Pint,max,A,4,Solar_7d; Air_tmin_7day; GWT_max_7day; ppt_7day; Air_trange; WL_daily_range; GWT_range; GWL_range; Water_area_m2_3d,Air_tmean_7day; GWT_mean_7day; GWT_min_7day; GWL_mean_3day; WL_mean_2day; WL_min_7day; GWL_min_3day; WL_max_7day; Air_tmax_7day; GWL_max_3day
+Pint,max,B,4,Solar_7d; Air_tmin_7day; ppt_7day; Air_trange,Air_tmean_7day; Air_tmax_7day
+Pint,max,A,5,Air_tmin_7day; GWT_min_7day; ppt_7day; Air_trange; WL_daily_range; GWT_range; GWL_range; Water_area_m2_3d,Air_tmean_7day; GWT_mean_7day; GWT_max_7day; WL_mean_2day; GWL_min_7day; WL_min_3day; GWL_mean_7day; Air_tmax_7day; WL_max_2day; GWL_max; Solar_3d
+Pint,max,B,5,Solar_3d; Air_tmin_7day; ppt_7day; Air_trange,Air_tmean_7day; Air_tmax_7day
+Pint,mean,A,1,Solar_daily; Air_tmin_7day; GWT_min_7day; ppt_7day; Air_trange; WL_daily_range; GWT_range; GWL_range; Water_area_m2_3d,Air_tmean_7day; GWT_mean_7day; GWT_max_7day; GWL_mean_7day; WL_max_7day; WL_min_2day; GWL_max_7day; GWL_min_7day; WL_mean_2day; Air_tmax_7day
+Pint,mean,B,1,Solar_daily; Air_tmin_7day; ppt_7day; Air_trange,Air_tmean_7day; Air_tmax_7day
+Pint,mean,A,2,WL_max_3day; Air_tmin_7day; GWT_max_7day; ppt_7day; Air_trange; WL_daily_range; GWT_range; GWL_range; Water_area_m2_3d,Air_tmean_7day; GWT_mean_7day; GWT_min_7day; WL_mean_3day; GWL_min_7day; GWL_max_3day; GWL_mean_7day; Air_tmax_7day; WL_min_3day; Solar_7d
+Pint,mean,B,2,Solar_7d; Air_tmin_7day; ppt_7day; Air_trange,Air_tmean_7day; Air_tmax_7day
+Pint,mean,A,3,WL_max_3day; Air_tmin_7day; GWT_min_7day; ppt_7day; Air_trange; WL_daily_range; GWT_range; GWL_range; Water_area_m2_3d,Air_tmean_7day; GWT_mean_7day; GWT_max_7day; WL_mean_3day; GWL_mean_3day; WL_min_3day; GWL_max_3day; Solar_7d; GWL_min_3day; Air_tmax_7day
+Pint,mean,B,3,Solar_7d; Air_tmin_7day; ppt_7day; Air_trange,Air_tmean_7day; Air_tmax_7day
+Pint,mean,A,4,Solar_7d; Air_tmin_7day; GWT_max_7day; ppt_7day; Air_trange; WL_daily_range; GWT_range; GWL_range; Water_area_m2_3d,Air_tmean_7day; GWT_mean_7day; GWT_min_7day; GWL_mean_3day; WL_min_3day; WL_mean_2day; GWL_min_3day; WL_max_7day; Air_tmax_7day; GWL_max_3day
+Pint,mean,B,4,Solar_7d; Air_tmin_7day; ppt_7day; Air_trange,Air_tmean_7day; Air_tmax_7day
+Pint,mean,A,5,Air_tmin_7day; GWT_min_7day; ppt_7day; Air_trange; WL_daily_range; GWT_range; GWL_range; Water_area_m2_3d,Air_tmean_7day; GWT_mean_7day; GWT_max_7day; WL_mean_2day; GWL_min_7day; WL_min_3day; GWL_mean_7day; Air_tmax_7day; WL_max_2day; GWL_max; Solar_3d
+Pint,mean,B,5,Solar_3d; Air_tmin_7day; ppt_7day; Air_trange,Air_tmean_7day; Air_tmax_7day
+Pint,range,A,1,Solar_2d; Air_tmax_7day; GWT_min_7day; ppt; Air_trange; WL_daily_range; GWT_range; GWL_range; Water_area_m2_3d,Air_tmean_7day; GWT_mean_7day; GWT_max_7day; GWL_mean_3day; WL_mean_3day; GWL_max_2day; WL_min_2day; GWL_min_3day; WL_max_2day; Air_tmin_7day
+Pint,range,B,1,Solar_2d; Air_tmin_7day; ppt; Air_trange,Air_tmean_7day; Air_tmax_7day
+Pint,range,A,2,WL_max_3day; Air_tmean_7day; Air_tmin_2day; GWT_max_7day; ppt; Air_trange; WL_daily_range; GWT_range; GWL_range; Water_area_m2_3d,GWT_mean_7day; GWT_min_7day; GWL_mean_7day; Air_tmax_7day; WL_min_7day; GWL_max_2day; WL_daily_mean; GWL_min_7day; Solar_3d
+Pint,range,B,2,Solar_3d; Air_tmax_7day; Air_tmin_2day; ppt; Air_trange,Air_tmean_7day
+Pint,range,A,3,Solar_daily; Air_tmin; GWT_mean_7day; GWL_max_7day; ppt; Air_trange; WL_daily_range; GWT_range; GWL_range; Water_area_m2_3d,GWT_max_7day; GWL_mean_7day; GWT_min; WL_mean_7day; Air_tmean_2day; WL_min_7day; GWL_min_7day; Air_tmax_2day; WL_max_2day
+Pint,range,B,3,Solar_daily; Air_tmin; ppt; Air_trange,Air_tmean_2day; Air_tmax_2day
+Pint,range,A,4,Solar_daily; Air_tmean_7day; Air_tmin; GWT_min_7day; ppt_7day; Air_trange; WL_daily_range; GWT_range; GWL_range; Water_area_m2_3d,GWT_mean; GWL_mean_7day; WL_mean_7day; GWT_max; WL_min_7day; GWL_min_7day; Air_tmax_2day; GWL_max_7day; WL_max_2day
+Pint,range,B,4,Solar_daily; Air_tmean_7day; Air_tmin; ppt_7day; Air_trange,Air_tmax_2day
+Pint,range,A,5,Solar_daily; Air_tmin_2day; GWT_min_7day; ppt_7day; Air_trange; WL_daily_range; GWT_range; GWL_range; Water_area_m2_3d,GWT_mean_7day; GWT_max_7day; WL_mean_7day; GWL_mean_7day; GWL_max_7day; WL_min_7day; Air_tmean_2day; Air_tmax; WL_max_7day; GWL_min_7day
+Pint,range,B,5,Solar_daily; Air_tmin_2day; ppt_7day; Air_trange,Air_tmean_2day; Air_tmax
+Sam,max,A,1,Solar_daily; WL_daily_max; Air_tmax; Air_tmin; GWT_max_7day; GWL_max; ppt_7day; GWT_range,Air_trange; WL_daily_range; GWL_range; GWT_mean_7day; Air_tmean; GWT_min_7day; GWL_mean; GWL_min; WL_daily_mean; WL_daily_min
+Sam,max,B,1,Solar_daily; Air_tmax; Air_tmin; ppt_7day,Air_trange; Air_tmean
+Sam,max,A,2,Solar_daily; WL_daily_max; Air_tmax; Air_tmin; GWT_max_2day; GWL_max; ppt_7day; GWT_range,Air_trange; WL_daily_range; GWL_range; Air_tmean; GWT_mean_2day; GWL_mean; GWT_min_2day; GWL_min; WL_daily_mean; WL_daily_min
+Sam,max,B,2,Solar_daily; Air_tmax; Air_tmin; ppt_7day,Air_trange; Air_tmean
+Sam,max,A,3,Solar_daily; WL_daily_mean; Air_tmax; Air_tmin; GWT_min; GWL_max; ppt_7day; WL_daily_range,Air_trange; GWT_range; GWL_range; Air_tmean; GWT_mean; GWL_mean; GWT_max; GWL_min; WL_daily_min; WL_max_3day
+Sam,max,B,3,Solar_daily; Air_tmax; Air_tmin; ppt_7day,Air_trange; Air_tmean
+Sam,max,A,4,Solar_daily; WL_daily_max; Air_tmax; Air_tmin; GWT_max_7day; GWL_max; ppt; GWT_range,Air_trange; WL_daily_range; GWL_range; GWT_mean_7day; Air_tmean; GWT_min_7day; GWL_mean; GWL_min; WL_daily_mean; WL_daily_min
+Sam,max,B,4,Solar_daily; Air_tmax; Air_tmin; ppt,Air_trange; Air_tmean
+Sam,max,A,5,Solar_daily; WL_daily_max; Air_tmax; Air_tmin; GWL_max; ppt_7day,Air_trange; WL_daily_range; GWT_range; GWL_range; Air_tmean; GWT_mean; GWL_mean; GWT_max; GWL_min; WL_daily_mean; WL_daily_min; GWT_min
+Sam,max,B,5,Solar_daily; Air_tmax; Air_tmin; ppt_7day,Air_trange; Air_tmean
+Sam,mean,A,1,Solar_daily; WL_daily_mean; Air_tmax; Air_tmin; GWL_max; ppt_7day; WL_daily_range; GWT_range,Air_trange; GWL_range; GWT_mean_7day; Air_tmean; GWT_min_7day; GWL_mean; GWL_min; WL_daily_max; WL_min_2day; GWT_max_7day
+Sam,mean,B,1,Solar_daily; Air_tmax; Air_tmin; ppt_7day,Air_trange; Air_tmean
+Sam,mean,A,2,Solar_daily; WL_daily_mean; Air_tmax; Air_tmin; GWT_mean_7day; GWL_max; ppt_7day; WL_daily_range; GWT_range,Air_trange; GWL_range; Air_tmean; GWT_max_2day; GWL_mean; GWT_min; GWL_min; WL_daily_max; WL_min_2day
+Sam,mean,B,2,Solar_daily; Air_tmax; Air_tmin; ppt_7day,Air_trange; Air_tmean
+Sam,mean,A,3,Solar_daily; WL_daily_mean; Air_tmin; GWT_max; GWL_max; ppt_7day; Air_trange; WL_daily_range,GWT_range; GWL_range; Air_tmean; GWT_mean; GWL_mean; GWT_min; GWL_min; WL_daily_max; WL_min_2day; Air_tmax_2day
+Sam,mean,B,3,Solar_daily; Air_tmin; ppt_7day; Air_trange,Air_tmean; Air_tmax_2day
+Sam,mean,A,4,Solar_daily; WL_daily_mean; Air_tmax; Air_tmin; GWL_max; ppt_7day; WL_daily_range; GWT_range,Air_trange; GWL_range; GWT_mean_7day; Air_tmean; GWT_min_7day; GWL_mean; GWL_min; WL_daily_max; WL_min_3day; GWT_max_7day
+Sam,mean,B,4,Solar_daily; Air_tmax; Air_tmin; ppt_7day,Air_trange; Air_tmean
+Sam,mean,A,5,Solar_daily; WL_min_2day; Air_tmax; Air_tmin; GWL_max; ppt_7day; WL_daily_range; GWT_range,Air_trange; GWL_range; Air_tmean; GWT_max; GWL_mean; GWT_min_2day; GWL_min; WL_daily_max; WL_daily_mean; GWT_mean
+Sam,mean,B,5,Solar_daily; Air_tmax; Air_tmin; ppt_7day,Air_trange; Air_tmean
+Sam,range,A,1,Solar_daily; WL_daily_max; Air_tmin_2day; GWL_min_7day; ppt; Air_trange; GWT_range; GWL_range,WL_daily_range; Air_tmax; GWT_max_7day; GWL_mean_7day; GWL_max_7day; GWT_mean; WL_mean_7day; Air_tmean; WL_daily_min; GWT_min_7day
+Sam,range,B,1,Solar_daily; Air_tmin_2day; ppt; Air_trange,Air_tmax; Air_tmean
+Sam,range,A,2,Solar_daily; WL_daily_max; Air_tmax; Air_tmin; GWT_min_7day; GWL_max_7day; ppt; GWT_range; GWL_range,Air_trange; WL_daily_range; GWT_mean_7day; GWL_mean_7day; Air_tmean; GWL_min_7day; GWT_max; WL_daily_mean; WL_daily_min
+Sam,range,B,2,Solar_daily; Air_tmax; Air_tmin; ppt,Air_trange; Air_tmean
+Sam,range,A,3,Solar_daily; WL_daily_min; Air_tmean; Air_tmin_7day; GWL_min_7day; ppt; Air_trange; WL_daily_range; GWT_range; GWL_range,Air_tmax; GWL_mean_7day; GWT_max; GWT_mean; GWL_max_7day; WL_mean_3day; WL_max_7day; GWT_min_3day
+Sam,range,B,3,Solar_daily; Air_tmean; Air_tmin_7day; ppt; Air_trange,Air_tmax
+Sam,range,A,4,Solar_daily; WL_daily_min; Air_tmin_3day; GWL_min_7day; ppt; Air_trange; WL_daily_range; GWT_range; GWL_range,GWT_mean_7day; Air_tmax; GWL_mean_7day; GWT_min_7day; GWL_max_7day; WL_mean_2day; WL_max_3day; Air_tmean; GWT_max_7day
+Sam,range,B,4,Solar_daily; Air_tmin_3day; ppt; Air_trange,Air_tmax; Air_tmean
+Sam,range,A,5,Solar_daily; WL_daily_max; Air_tmax; Air_tmin; GWT_max_2day; GWL_min_7day; ppt; GWT_range; GWL_range,Air_trange; WL_daily_range; GWL_mean_7day; GWT_min; Air_tmean; GWT_mean; GWL_max_7day; WL_mean_7day; WL_daily_min
+Sam,range,B,5,Solar_daily; Air_tmax; Air_tmin; ppt,Air_trange; Air_tmean

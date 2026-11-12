@@ -1,0 +1,179 @@
+---
+title: "Model performance comparison plots"
+author: "Michael Krochta"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+Compare global and local model RMSE for full and partial predictor sets.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(ggh4x)
+```
+
+## Load model results
+
+```{r load_metrics}
+project_dir <- "C:/Users/mbkro/OneDrive/Documents/wetland-ml-models"
+fig_dir <- file.path(project_dir, "figures")
+
+path_global_ml <- file.path(project_dir, "results", "metrics_overall_revised.csv")
+path_global_lme <- file.path(project_dir, "results", "lme_metrics_overall_revised.csv")
+path_local <- file.path(project_dir, "results", "local_results",
+                        "local_models_summary_common_dates_revised.csv")
+
+input_paths <- c(path_global_ml, path_global_lme, path_local)
+missing_paths <- input_paths[!file.exists(input_paths)]
+if (length(missing_paths)) {
+  stop("Missing input files:\n", paste(missing_paths, collapse = "\n"))
+}
+
+g_ml <- read_csv(path_global_ml, show_col_types = FALSE)
+g_lme <- read_csv(path_global_lme, show_col_types = FALSE)
+loc <- read_csv(path_local, show_col_types = FALSE)
+
+required_global <- c("response", "set", "alg", "RMSE")
+required_local <- c("Site", "Metric", "Set", "Model", "RMSE")
+stopifnot(
+  all(required_global %in% names(g_ml)),
+  all(required_global %in% names(g_lme)),
+  all(required_local %in% names(loc))
+)
+
+response_labels <- c(max = "Max WT", mean = "Mean WT", range = "Range WT")
+
+glob_all <- bind_rows(
+  g_ml %>% transmute(response = tolower(response), set = toupper(set),
+                     alg = toupper(alg), RMSE),
+  g_lme %>% transmute(response = tolower(response), set = toupper(set),
+                      alg = "GLS", RMSE)
+) %>%
+  mutate(
+    response = unname(response_labels[response]),
+    alg = factor(alg, levels = c("GLS", "RFR", "XGB"))
+  )
+
+loc_all <- loc %>%
+  transmute(
+    Site = as.character(Site),
+    response = unname(response_labels[tolower(Metric)]),
+    set = toupper(Set),
+    alg = factor(toupper(Model), levels = c("GLS", "RFR", "XGB")),
+    RMSE
+  )
+
+stopifnot(
+  !anyNA(glob_all[, c("response", "set", "alg", "RMSE")]),
+  !anyNA(loc_all[, c("Site", "response", "set", "alg", "RMSE")]),
+  all(is.finite(glob_all$RMSE)),
+  all(is.finite(loc_all$RMSE)),
+  nrow(glob_all) == 18L,
+  nrow(loc_all) == 126L,
+  n_distinct(loc_all$Site) == 7L,
+  !anyDuplicated(glob_all[c("response", "set", "alg")]),
+  !anyDuplicated(loc_all[c("Site", "response", "set", "alg")])
+)
+```
+
+## Global and local model performance
+
+```{r plot_combined}
+alg_levels <- c("LM", "RFR", "XGB")
+
+glob_combined <- glob_all %>%
+  mutate(
+    alg = recode(as.character(alg), "GLS" = "LM", "LME" = "LM"),
+    alg = factor(alg, levels = alg_levels),
+    set = factor(set, levels = c("A", "B"), labels = c("Full", "Partial"))
+  ) %>%
+  group_by(response, set, alg) %>%
+  summarise(RMSE = mean(RMSE, na.rm = TRUE), .groups = "drop")
+
+loc_combined <- loc_all %>%
+  mutate(
+    alg = recode(as.character(alg), "GLS" = "LM", "LME" = "LM"),
+    alg = factor(alg, levels = alg_levels),
+    set = factor(set, levels = c("A", "B"), labels = c("Full", "Partial"))
+  ) %>%
+  group_by(Site, response, set, alg) %>%
+  summarise(RMSE = mean(RMSE, na.rm = TRUE), .groups = "drop")
+
+ylims_by_resp <- bind_rows(
+  glob_all %>% select(response, RMSE),
+  loc_all %>% select(response, RMSE)
+) %>%
+  group_by(response = as.character(response)) %>%
+  summarise(ymin = 0, ymax = max(RMSE, na.rm = TRUE), .groups = "drop") %>%
+  mutate(ymax = max(pretty(c(0, ymax))))
+
+ylims_df <- expand_grid(
+  response = unique(ylims_by_resp$response),
+  alg = factor(alg_levels, levels = alg_levels),
+  set = c("Full", "Partial")
+) %>%
+  left_join(ylims_by_resp, by = "response") %>%
+  pivot_longer(c(ymin, ymax), names_to = "which", values_to = "RMSE")
+
+site_pal <- c(
+  Anvil = "#E67E80", Butte = "#8AADF4", Cooper = "#A6D189",
+  Crater = "#C6A0F6", Hideaway = "#7DC4E4", Pint = "#E5C890", Sam = "#F4B8E4"
+)
+
+p_combined <- ggplot() +
+  geom_blank(data = ylims_df, aes(x = alg, y = RMSE)) +
+  geom_line(
+    data = loc_combined,
+    aes(x = alg, y = RMSE, group = interaction(Site, set), color = Site),
+    linewidth = 0.9, alpha = 0.95
+  ) +
+  geom_point(
+    data = loc_combined,
+    aes(x = alg, y = RMSE, color = Site),
+    size = 2.4
+  ) +
+  geom_line(
+    data = glob_combined,
+    aes(x = alg, y = RMSE, group = response, linetype = "Global (overall)"),
+    color = "black", linewidth = 0.9
+  ) +
+  geom_point(
+    data = glob_combined,
+    aes(x = alg, y = RMSE, shape = "Global (overall)"),
+    color = "black", fill = "white", stroke = 1.1, size = 2.8
+  ) +
+  facet_grid2(set ~ response, scales = "free_y", axes = "margins") +
+  facetted_pos_scales(
+    y = list(
+      set == "Full" ~ scale_y_continuous(limits = c(0, 3), breaks = 0:3),
+      set == "Partial" ~ scale_y_continuous(limits = c(0, 3), breaks = 0:3)
+    )
+  ) +
+  scale_color_manual(values = site_pal, name = "Site", drop = FALSE) +
+  scale_linetype_manual(values = c("Global (overall)" = "dashed"), guide = "legend") +
+  scale_shape_manual(values = c("Global (overall)" = 21), guide = "legend") +
+  guides(
+    linetype = guide_legend(title = NULL, override.aes = list(color = "black")),
+    shape = guide_legend(title = NULL,
+                         override.aes = list(color = "black", fill = "white", size = 3)),
+    color = guide_legend(title = "Site")
+  ) +
+  labs(x = "Algorithm", y = "RMSE (°C)") +
+  theme_minimal(base_size = 16) +
+  theme(
+    axis.title.x = element_text(size = 18, face = "bold"),
+    axis.title.y = element_text(size = 18, face = "bold"),
+    axis.text.x = element_text(size = 15),
+    axis.text.y = element_text(size = 15),
+    strip.text = element_text(size = 17, face = "bold"),
+    legend.title = element_text(size = 16, face = "bold"),
+    legend.text = element_text(size = 15),
+    legend.position = "bottom",
+    legend.box = "vertical",
+    panel.grid.minor = element_blank()
+  )
+
+outfile <- file.path(fig_dir, "local_vs_global_RMSE_Combined_Full_Partial_revised.png")
+ggsave(outfile, p_combined, width = 11, height = 10, dpi = 300, bg = "white")
+```

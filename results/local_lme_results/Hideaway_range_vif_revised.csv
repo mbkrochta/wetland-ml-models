@@ -1,0 +1,11 @@
+Site,Metric,Set,fold,kept,dropped
+Hideaway,range,A,1,Solar_daily; Air_tmin_3day; GWT_min_7day; GWL_max; ppt; Air_trange; GWT_range; Water_area_m2_3d,GWL_range; GWT_mean_7day; Air_tmean_3day; GWL_mean; GWT_max_7day; GWL_min; Air_tmax_3day
+Hideaway,range,B,1,Solar_daily; Air_tmin_3day; ppt; Air_trange,Air_tmean_3day; Air_tmax_3day
+Hideaway,range,A,2,Solar_daily; Air_tmin_3day; GWL_max_7day; ppt; Air_trange; GWT_range; GWL_range; Water_area_m2_3d,GWL_mean_7day; Air_tmax; GWT_mean_7day; GWL_min_7day; GWT_min_7day; Air_tmean; GWT_max
+Hideaway,range,B,2,Solar_daily; Air_tmin_3day; ppt; Air_trange,Air_tmax; Air_tmean
+Hideaway,range,A,3,Solar_daily; Air_tmax; Air_tmin; GWT_min_2day; GWL_max; ppt; GWT_range; Water_area_m2_3d,Air_trange; GWL_range; Air_tmean; GWL_mean; GWT_mean_3day; GWL_min; GWT_max_7day
+Hideaway,range,B,3,Solar_daily; Air_tmax; Air_tmin; ppt,Air_trange; Air_tmean
+Hideaway,range,A,4,Solar_daily; Air_tmin_3day; GWT_min_7day; GWL_max; ppt; Air_trange; GWT_range; Water_area_m2_3d,GWL_range; GWT_mean_7day; Air_tmax; GWL_mean; GWT_max_7day; GWL_min; Air_tmean
+Hideaway,range,B,4,Solar_daily; Air_tmin_3day; ppt; Air_trange,Air_tmax; Air_tmean
+Hideaway,range,A,5,Solar_daily; Air_tmax; Air_tmin; GWL_max_7day; ppt; GWT_range; GWL_range; Water_area_m2_3d,Air_trange; GWT_mean_7day; GWL_mean_7day; Air_tmean; GWT_min_7day; GWL_min_7day; GWT_max_7day
+Hideaway,range,B,5,Solar_daily; Air_tmax; Air_tmin; ppt,Air_trange; Air_tmean
