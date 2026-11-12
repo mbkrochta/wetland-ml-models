@@ -18,7 +18,7 @@ This repository contains scripts, data structures, and model outputs used to ana
 
 \- `results/` – Model output summaries and evaluation metrics
 
-\- `scripts/` – Core R or Python scripts for preprocessing, modeling, and analysis
+\- `scripts/` – Core R scripts for preprocessing, modeling, and analysis
 
 
 
@@ -46,7 +46,7 @@ If you use this code or dataset in your own research, please cite:
 
 
 
-Krochta, M., Chang, H., Zaret, K. (In prep). Modeling thermal regimes of Pacific Northwest wetlands using machine learning. 
+Krochta, M., Chang, H., Zaret, K. (In revision). Predicting daily palustrine wetland water temperatures using statistical and machine learning models. 
 
 
 
